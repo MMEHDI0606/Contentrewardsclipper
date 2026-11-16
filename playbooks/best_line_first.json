@@ -1,0 +1,36 @@
+{
+ "id": "best_line_first",
+ "name": "Best line first",
+ "grade": "A/C",
+ "share": 1.0,
+ "when": {
+  "categories": [
+   "funny",
+   "rage",
+   "take"
+  ]
+ },
+ "hook": {
+  "archetype": "best_line",
+  "rules": "Quote or closely paraphrase the strongest line, in capitals."
+ },
+ "edit": {
+  "teaser": 3.0,
+  "layout": "crop"
+ },
+ "captions": {
+  "style": "bounce"
+ },
+ "variants": [
+  {
+   "id": "a"
+  },
+  {
+   "id": "b",
+   "captions": {
+    "style": "clean"
+   }
+  }
+ ],
+ "about": "Opens on the strongest line or reaction, then the lead-up."
+}

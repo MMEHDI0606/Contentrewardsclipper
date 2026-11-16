@@ -1,0 +1,28 @@
+{
+ "id": "fail_replay",
+ "name": "Fail replay",
+ "grade": "experimental",
+ "share": 0.2,
+ "when": {
+  "categories": [
+   "fail"
+  ]
+ },
+ "hook": {
+  "archetype": "result_first",
+  "rules": "Say it goes wrong, not how."
+ },
+ "edit": {
+  "layout": "crop",
+  "teaser": 3.0
+ },
+ "captions": {
+  "style": "bounce"
+ },
+ "variants": [
+  {
+   "id": "a"
+  }
+ ],
+ "about": "The fail is shown first, then again in full. Experimental."
+}

@@ -1,0 +1,12 @@
+{
+  "name": "peakcut-brain",
+  "private": true,
+  "type": "module",
+  "description": "MCP server that lets a Claude Code session answer PeakCut's AI requests",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2"
+  }
+}

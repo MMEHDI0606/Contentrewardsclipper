@@ -11,7 +11,7 @@ import traceback
 import uuid
 from pathlib import Path
 
-from . import brain, config, creators, ctx, load, media, render, roman, safe, transcribe, usage
+from . import brain, bridge, campaigns, config, creators, ctx, load, media, playbooks, render, roman, safe, transcribe, usage
 
 class _FairQueue:
     """Whose video is next. Each person has their own line and the lines take turns, so someone who adds ten
@@ -114,6 +114,29 @@ DEFAULTS = {"max_clips": 6, "min_len": 15, "max_len": 60, "style": "bounce", "la
 LIMITS = {"max_clips": (1, 20), "min_len": (5, 120), "max_len": (10, 180), "quality": (360, 1080)}
 
 
+def history(creator_id, limit=10) -> list:
+    """A creator's latest clips, oldest first: what playbook rotation looks at."""
+    if not creator_id:
+        return []
+    got = [k for j in list(_by_user.get(ctx.uid(), {}).values()) if j.get("creator") == creator_id or j.get("source_creator") == creator_id
+           for k in j.get("clips", []) if k.get("playbook")]
+    return sorted(got, key=lambda k: k.get("made_at") or 0)[-limit:]
+
+
+def prepare_clip(job, clip, has_chat=False):
+    """A newly found clip: its campaign, disclosure and playbook, settled before it is made."""
+    cid = job.get("creator") or job.get("source_creator")
+    camp = campaigns.get(job.get("campaign"))
+    clip["campaign"] = camp["id"] if camp else None
+    if camp:
+        clip["disclosure"] = camp["disclosure"]
+        clip.setdefault("cr", {"state": "rendered"})
+    elif job.get("campaign_needed"):
+        clip["campaign_needed"] = True
+    playbooks.choose(clip, history(cid), creators.get(cid) if cid else None, has_chat)
+    return clip
+
+
 def clean_options(options) -> dict:
     """Only known settings, each inside its allowed range. Raises ValueError on nonsense."""
     out = {}
@@ -158,6 +181,8 @@ def public(job) -> dict:
                             f"Waiting in line: {n} video{'s' if n != 1 else ''} ahead of yours")
         elif n == 0 and _q.held:
             out["stage"] = "High demand right now: yours is next"
+    elif job.get("status") in ("running", "live") and bridge.waiting_for(job["id"]):
+        out["stage"] = "Waiting for Claude session" + ("" if bridge.connected() else ": start it with start.cmd")
     return out
 
 
@@ -285,12 +310,19 @@ def create(source: dict, options: dict, enqueue=True, creator=None, kind="video"
     else:
         d, base, creator = config.user_dir(ctx.uid()) / "jobs" / jid, dict(DEFAULTS), None
     d.mkdir(parents=True)
+    wanted = str((options or {}).get("campaign") or "") if isinstance(options, dict) else ""
+    camp = campaigns.get(wanted) if wanted else (campaigns.default_for(creator) if creator else None)
+    if camp:     # the campaign's lengths win over the creator's, unless set for this one video
+        base.update(min_len=camp["min_len"], max_len=camp["max_len"])
     opts = {**base, **clean_options(options)}
     if opts["min_len"] >= opts["max_len"]:
         opts["min_len"] = max(5, opts["max_len"] - 5)
     job = {"id": jid, "user": ctx.uid(), "kind": kind, "creator": creator, "dir": str(d), "created": time.time(), "source": source,
            "options": opts, "status": "queued", "stage": "Waiting", "progress": 0.0,
-           "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {}}
+           "title": source.get("name", ""), "uploader": "", "duration": 0, "clips": [], "error": None, "ai": {},
+           "campaign": camp["id"] if camp else None}
+    if not camp and creator and campaigns.needs_choice(creator):
+        job["campaign_needed"] = True
     with _lock:
         _jobs[jid] = job
         _by_user.setdefault(job["user"], {})[jid] = job
@@ -349,9 +381,17 @@ def request_render(jid, cid, changes: dict):
         raise ValueError("Those times aren't valid.")
     if not 3 <= new["end"] - new["start"] <= 180:
         raise ValueError("A clip can be 3 to 180 seconds long.")
-    for k in ("hook", "title", "description", "style", "layout"):
+    for k in ("hook", "title", "description", "style", "layout", "context"):
         if k in changes:
-            new[k] = str(changes[k])[:{"hook": 60, "title": 100, "description": 2000}.get(k, 20)]
+            new[k] = str(changes[k])[:{"hook": 60, "title": 100, "description": 2000, "context": 90}.get(k, 20)]
+    if "playbook" in changes and changes["playbook"] in playbooks.structures():
+        p = playbooks.structures()[changes["playbook"]]
+        new.update(playbook=changes["playbook"], playbook_reason="Chosen by you.",
+                   teaser=float((p.get("edit") or {}).get("teaser") or 0), context_line=bool((p.get("edit") or {}).get("context_line")))
+    if "teaser" in changes:
+        new["teaser"] = max(0.0, min(5.0, float(changes["teaser"] or 0)))
+    if "context_line" in changes:
+        new["context_line"] = bool(changes["context_line"])
     if new.get("style") not in render.STYLES:
         new["style"] = DEFAULTS["style"]
     if new.get("layout") not in render.LAYOUTS:
@@ -371,6 +411,8 @@ def render_one(job, clip, words):
         if not clip.get("src"):
             clip["end"] = min(clip["end"], job["duration"])
         local = dict(clip, start=clip["start"] - off, end=clip["end"] - off, hook=roman.to_roman(clip.get("hook") or ""))
+        who = creators.get(job.get("creator") or job.get("source_creator")) if (job.get("creator") or job.get("source_creator")) else None
+        local["facecam"] = (who or {}).get("facecam") or []
         span = [round(clip["start"], 2), round(clip["end"], 2), "en2"]      # "en2": captions made always-English
         if clip.get("fixed_for") == span and clip.get("fixed_words") and not any(
                 roman.needs_roman(w.get("w", "")) for w in clip["fixed_words"]):
@@ -379,6 +421,7 @@ def render_one(job, clip, words):
             raw = [w for w in words if clip["start"] - 1 <= w["s"] <= clip["end"] + 1]
             try:
                 usage.set_context(job.get("creator"), job.get("title") or "")
+                bridge.tag(job["id"])
                 raw = brain.english_captions(raw, job.get("lang") or "", job.get("title") or "",
                                              youtube_english=lambda: _english_part(job, clip))
                 clip.update(fixed_words=raw, fixed_for=span)
@@ -496,6 +539,7 @@ def _run_job(job):
     t0 = time.time()
     notes = []
     usage.set_context(job["creator"], job["title"] or src.get("name"))
+    bridge.tag(job["id"])
     resuming = bool(job.pop("resume", False)) and (d / "words.json").is_file()
     if resuming:   # after a restart: keep the transcript parts, clips and AI answers already made, and carry on
         _set(job, status="running", stage="Picking up where it stopped", error=None)
@@ -518,6 +562,15 @@ def _run_job(job):
             raise RuntimeError("This link is a live stream, so it would never finish downloading. Open the creator, "
                                "put this link under Setup, and press Start recording instead.")
         _set(job, title=meta["title"], uploader=meta["uploader"], duration=meta["duration"])
+        if not job.get("creator") and not job.get("campaign"):
+            # a pasted video from a channel that belongs to one of the creators: it gets that creator's campaign
+            who = campaigns.match_creator(meta)
+            if who:
+                job["source_creator"] = who
+                camp = campaigns.attach(job, who)
+                if camp:
+                    o.update(min_len=camp["min_len"], max_len=camp["max_len"])
+                save(job)
         if not job.get("thumb") and media.save_thumb(d, url=src["url"]):
             _set(job, thumb=True)
         usage.set_context(job["creator"], meta["title"])
@@ -664,7 +717,8 @@ def _run_job(job):
         quota = max(1, math.ceil(left / (len(blocks) - bi)))
         s0 = int((a - lo) / 16000)
         found, ai = brain.find_clips(bw, db[s0: s0 + int((b - a) / 16000) + 1], (b - a) / 16000, job["title"],
-                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append)
+                                     job["uploader"], quota, int(o["min_len"]), int(o["max_len"]), notes.append,
+                                     brief=campaigns.brief_for(job))
         tokens += ai.get("tokens", 0)
         model = ai.get("model") or model
         if ai.get("note"):
@@ -672,6 +726,7 @@ def _run_job(job):
         for c in found:
             c.update(id=f"clip{len(job['clips']) + 1:02d}", start=round(c["start"] + shift, 2),
                      end=round(c["end"] + shift, 2), style=o["style"], layout=o["layout"], status="queued", version=0)
+            prepare_clip(job, c)
             job["clips"].append(c)
             futures.append((renders.submit(ctx.bind(make), c, list(words)), c))
         job["ai"] = {"model": model, "tokens": tokens, "note": "", "log": notes[-5:]}

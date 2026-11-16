@@ -1,0 +1,31 @@
+{
+ "id": "chat_erupts",
+ "name": "Chat erupts",
+ "grade": "experimental",
+ "share": 0.2,
+ "when": {
+  "categories": [
+   "shock",
+   "funny",
+   "clutch"
+  ],
+  "needs": "chat"
+ },
+ "hook": {
+  "archetype": "surprise",
+  "rules": "What made chat explode, in five words or fewer."
+ },
+ "edit": {
+  "layout": "crop",
+  "teaser": 2.0
+ },
+ "captions": {
+  "style": "hype"
+ },
+ "variants": [
+  {
+   "id": "a"
+  }
+ ],
+ "about": "For moments with a chat spike. Experimental: retire it if it does not beat Plain."
+}

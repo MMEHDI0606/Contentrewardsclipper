@@ -1,0 +1,14 @@
+{
+ "id": "reaction_stack",
+ "name": "Reaction stack",
+ "grade": "C",
+ "kind": "layout",
+ "share": 1.0,
+ "when": {
+  "needs": "facecam"
+ },
+ "edit": {
+  "layout": "split"
+ },
+ "about": "Facecam on top, gameplay below, captions on the line between. Needs the camera box set on the creator."
+}

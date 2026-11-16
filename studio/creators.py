@@ -19,7 +19,8 @@ DEFAULTS = {"name": "", "channel": "", "style": "bounce", "layout": "blur", "min
             "plan": "free", "decide_mode": "both", "must_clip_min": 0, "min_gap_min": 2,
             "trigger_words": "clip that, clip it",
             "autopost": False, "accounts": [], "post_min_score": 75, "post_gap_min": 45, "daily_cap": 6,
-            "privacy": "public", "post_footer": "", "rate_per_1k": 0.0, "channels": {}}
+            "privacy": "public", "post_footer": "", "rate_per_1k": 0.0, "channels": {},
+            "campaign": "", "facecam": [], "priority": 0}
 PLATFORMS = ("youtube", "twitch", "kick")
 
 
@@ -67,6 +68,14 @@ def _clean(data: dict) -> dict:
             v = [str(x) for x in v][:20] if isinstance(v, list) else []
         elif k == "rate_per_1k":
             v = max(0.0, min(1000.0, float(v or 0)))
+        elif k == "facecam":     # where the streamer's camera sits in the frame: [x, y, w, h] as parts of 1
+            v = [round(max(0.0, min(1.0, float(x))), 4) for x in v][:4] if isinstance(v, list) and len(v) == 4 else []
+            if v and (v[2] < 0.05 or v[3] < 0.05 or v[0] + v[2] > 1.001 or v[1] + v[3] > 1.001):
+                raise ValueError("The camera box must sit inside the video.")
+        elif k == "priority":    # recording order when more creators are live than can be recorded (lower first)
+            v = max(0, min(999, int(float(v or 0))))
+        elif k == "campaign":
+            v = str(v or "").strip()[:40]
         elif k == "plan":
             v = v if v in ("free", "pro", "max") else "free"
         elif k == "decide_mode":

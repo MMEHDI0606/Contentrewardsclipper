@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "peakcut": {
+      "command": "node",
+      "args": ["server.ts"],
+      "timeout": 600000
+    }
+  }
+}

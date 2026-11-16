@@ -27,6 +27,11 @@ A short map for contributors and AI coding assistants.
 | `studio/media.py` | Downloading (yt-dlp), probing, audio |
 | `studio/auth.py`, `studio/account.py`, `studio/admin.py` | Sign-in, deleting things, the admin dashboard |
 | `studio/db.py` | Database tables (SQLAlchemy core; SQLite or PostgreSQL) |
+| `studio/bridge.py`, `brain/` | The Claude Code session as the AI: request queue, and the MCP server it talks through |
+| `studio/campaigns.py` | Campaigns, their links to creators, the campaign check, the submission tracker |
+| `studio/cr.py` | Content Rewards through Playwright: reading campaign pages, logging in, submitting |
+| `studio/playbooks.py`, `playbooks/` | Recipes for how a clip is presented, and their rotation |
+| `studio/insights.py` | Views grouped by playbook, length, hour...; account health; the weekly review |
 | `web/index.html` | The whole signed-in app, one file, no build step |
 
 ## Rules worth knowing

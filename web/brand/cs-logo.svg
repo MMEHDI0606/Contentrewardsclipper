@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="262" height="64" viewBox="0 0 262 64">
+<rect width="64" height="64" rx="16" fill="#9B80FF"/>
+<rect x="20" y="11" width="24" height="42" rx="6" fill="none" stroke="#150F2B" stroke-width="4"/>
+<path d="M28.5 24.5v15l12-7.5z" fill="#150F2B"/>
+<text x="78" y="42" font-family="'Segoe UI',Helvetica,Arial,sans-serif" font-size="27" letter-spacing="-0.4"><tspan font-weight="700" fill="#16141F">Clipping</tspan><tspan font-weight="400" fill="#7752F5"> Studio</tspan></text>
+</svg>

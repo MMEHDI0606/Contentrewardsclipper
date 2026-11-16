@@ -1,0 +1,36 @@
+{
+ "id": "result_first",
+ "name": "Result first",
+ "grade": "B",
+ "share": 1.0,
+ "when": {
+  "categories": [
+   "clutch",
+   "shock",
+   "fail"
+  ]
+ },
+ "hook": {
+  "archetype": "result_first",
+  "rules": "Name the outcome before the build-up (for example KAI LOSES IT ALL)."
+ },
+ "edit": {
+  "teaser": 2.5,
+  "layout": "crop"
+ },
+ "captions": {
+  "style": "hype"
+ },
+ "variants": [
+  {
+   "id": "a"
+  },
+  {
+   "id": "b",
+   "captions": {
+    "style": "bounce"
+   }
+  }
+ ],
+ "about": "The last seconds (the result) play first, then the clip from its setup, ending on the reaction."
+}

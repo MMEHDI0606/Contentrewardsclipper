@@ -2,6 +2,7 @@
 
 Public pages:  /  /login  /signup          The app:  /app  (signed-in users only)
 Everything under /api, /media and /oauth needs a session, except /api/auth/* and /api/public."""
+import asyncio
 import hashlib
 import hmac
 import json
@@ -21,8 +22,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from . import admin as admins
 from . import account, load
-from . import (accounts, ai, alerts, auth, config, creators, ctx, db, jobs, live, media, posting,
-               profiles, render, safe, transcribe, usage)
+from . import (accounts, ai, alerts, auth, bridge, campaigns, config, creators, cr, ctx, db, insights, jobs, live,
+               media, playbooks, posting, profiles, render, safe, transcribe, usage)
 
 from . import tools as _tools  # noqa: E402
 
@@ -34,9 +35,9 @@ def _quiet(fn):
         print(f"  {e}", flush=True)
 
 
-app = FastAPI(title="PeakCut", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Clipping Studio", docs_url=None, redoc_url=None, openapi_url=None)
 WEB = config.ROOT / "web"
-OPEN = ("/api/auth/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
+OPEN = ("/api/auth/", "/api/brain/", "/pub/", "/api/public", "/auth/google/", "/auth/verify", "/brand/", "/assets/", "/healthz", "/favicon.ico", "/robots.txt", "/sitemap.xml")
 PAGES = {"/": "landing.html", "/login": "auth.html", "/signup": "auth.html", "/reset": "reset.html",
          "/privacy": "legal.html", "/terms": "legal.html", "/acceptable-use": "legal.html"}
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".ts", ".flv"}
@@ -69,9 +70,13 @@ def _startup():
     if not transcribe.REMOTE and config.env("PEAKCUT_FETCH_MODEL", "1") != "0":     # the speech model: fetched now, in the background, if it was never downloaded
         from . import fetch_model
         threading.Thread(target=lambda: _quiet(fetch_model.ensure), daemon=True).start()
+    bridge.token()                   # the secret the Claude Code session's MCP server reads (data/brain.token)
     jobs.start()
     live.start()
     posting.start()
+    cr.start()
+    insights.start()
+    threading.Thread(target=_brain_watch, daemon=True).start()
     from . import updates
     updates.start()                  # looks for a newer PeakCut every minute, in the background
 
@@ -132,7 +137,7 @@ class Gate:
             # must have been asked for by its real address (a number, "localhost", or the address in settings),
             # so another website cannot reach it through a made-up name that points at this machine.
             if not _own_address(req.headers.get("host", "")):
-                return await deny(403, "Open PeakCut by its own address.")
+                return await deny(403, "Open Clipping Studio by its own address.")
             if path == "/" or path == "/reset" or path.startswith("/auth/"):
                 return await deny(303, "", redirect="/app")
             if path.startswith("/api/auth/") and path != "/api/auth/me":
@@ -348,9 +353,9 @@ def reset_page():
 
 
 LEGAL = {
-    "privacy": ("Privacy Policy", "How PeakCut collects, uses and protects your data, including Google user data, cookies and your privacy rights."),
-    "terms": ("Terms of Service", "The terms for using PeakCut, the AI clipping tool for streams and videos: accounts, availability and liability."),
-    "acceptable-use": ("Acceptable Use Policy", "What you may and may not do with PeakCut, the AI stream clipping tool."),
+    "privacy": ("Privacy Policy", "How Clipping Studio collects, uses and protects your data, including Google user data, cookies and your privacy rights."),
+    "terms": ("Terms of Service", "The terms for using Clipping Studio, the AI clipping tool for streams and videos: accounts, availability and liability."),
+    "acceptable-use": ("Acceptable Use Policy", "What you may and may not do with Clipping Studio, the AI stream clipping tool."),
 }
 
 
@@ -365,9 +370,9 @@ def legal_page(request: Request):
     contact = config.CONTACT_EMAIL
     who = (f'<a href="mailto:{_h.escape(contact)}">{_h.escape(contact)}</a>' if contact
            else "the contact details on our website")
-    name = _h.escape(config.LEGAL_NAME or "PeakCut")
+    name = _h.escape(config.LEGAL_NAME or "Clipping Studio")
     law = (f"the laws of {_h.escape(config.LEGAL_COUNTRY)}" if config.LEGAL_COUNTRY
-           else "the laws of the country where PeakCut's operator is established")
+           else "the laws of the country where Clipping Studio's operator is established")
     out = (_LEGAL_HTML or (WEB / "legal.html").read_text(encoding="utf-8"))
     for k, v in {"{{CONTACT}}": who, "{{PAGE}}": page, "{{PAGE_PATH}}": page, "{{SITE}}": _h.escape(config.PUBLIC_URL),
                  "{{NAME}}": name, "{{LAW}}": law, "{{TITLE}}": title, "{{DESC}}": desc}.items():
@@ -415,7 +420,7 @@ def asset(name: str):
 
 @app.get("/favicon.ico")
 def favicon():
-    return RedirectResponse("/brand/favicon.svg", 308)
+    return RedirectResponse("/brand/cs-mark.svg", 308)
 
 
 # ================================================================ sign up, sign in, sign out
@@ -558,10 +563,68 @@ def status(request: Request):
     from . import notices
     from . import updates
     me_ = _me(request)
-    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "unread": notices.unread(),
+    return {"user": auth.public(me_), "update": updates.latest() if me_.is_admin else None, "accounts": config.ACCOUNTS, "disk_full": load.disk_full(), "no_ffmpeg": bool(_tools.missing()), "links": {"repo": config.REPO_URL, "follow": config.FOLLOW_URL}, "ai": usage.brief(), "brain": _brain_card(), "unread": notices.unread(),
             "tour": not accounts.settings()["tour_done"],
             "youtube": accounts.youtube_ready(), "connect": {p: accounts.can_connect(p) for p in accounts.PLATFORM_NAMES}, "max_upload_mb": config.MAX_UPLOAD_MB, "upload_part_mb": config.UPLOAD_PART_MB, "max_batch": config.MAX_ACTIVE_JOBS_PER_USER,
             "styles": {k: v["label"] for k, v in render.STYLES.items()}, "layouts": render.LAYOUTS}
+
+
+def _brain_card():
+    """Shown only when the Claude Code session is the chosen AI."""
+    return {**bridge.status(), "start": "start.cmd"} if ai.provider() == "claude_session" else None
+
+
+# ================================================================ the brain: a Claude Code session on this computer
+# Only its MCP server calls these: from this computer, with the secret in data/brain.token. They are listed in OPEN
+# so the sign-in gate lets them through even when accounts are on; this check is their gate instead.
+def _brain_only(request: Request):
+    peer = request.client.host if request.client else ""
+    proxied = any(h in request.headers for h in ("x-forwarded-for", "forwarded", "cf-connecting-ip", "x-real-ip"))
+    if peer not in ("127.0.0.1", "::1") or proxied:
+        raise HTTPException(404, "Not Found")
+    if not bridge.token_ok(request.headers.get("x-peakcut-brain", "")):
+        raise HTTPException(401, "Wrong or missing brain token.")
+
+
+@app.get("/api/brain/next")
+async def brain_next(request: Request, wait: float = 25):
+    _brain_only(request)
+    end = time.time() + max(0.0, min(float(bridge.MAX_WAIT), wait))
+    while True:
+        if await request.is_disconnected():
+            return Response(status_code=204)
+        got = bridge.lease()
+        if got or time.time() >= end:
+            return got or {"idle": True, "pending": bridge.pending()}
+        await asyncio.sleep(0.3)
+
+
+@app.post("/api/brain/answer")
+def brain_answer(request: Request, body: dict = Body(...)):
+    _brain_only(request)
+    ok, msg = bridge.answer(str(body.get("id") or ""), str(body.get("answer") or ""))
+    return {"ok": ok, "message": msg}
+
+
+@app.get("/api/brain/events")
+async def brain_events(request: Request):
+    """Held open by the MCP server: a line each time the number of waiting requests changes, and a heartbeat."""
+    from fastapi.responses import StreamingResponse
+    _brain_only(request)
+
+    async def lines():
+        bridge.stream(True)
+        last, beat = -1, 0.0
+        try:
+            while not await request.is_disconnected():
+                n = bridge.pending()
+                if n != last or time.time() - beat > 15:
+                    yield f"data: {json.dumps({'pending': n})}\n\n"
+                    last, beat = n, time.time()
+                await asyncio.sleep(0.5)
+        finally:
+            bridge.stream(False)
+    return StreamingResponse(lines(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
 # ================================================================ videos
@@ -1038,7 +1101,7 @@ def email_preview(request: Request, kind: str = "verify"):
     from . import mailer
     _admin(request)
     if kind == "reset":
-        page = mailer.preview("Reset your password", "Someone asked to reset the password for this PeakCut account. If that was you, choose a new one below.",
+        page = mailer.preview("Reset your password", "Someone asked to reset the password for this Clipping Studio account. If that was you, choose a new one below.",
                               "Choose a new password", config.PUBLIC_URL + "/reset?t=example",
                               "The link works for one hour. If you didn't ask for this, ignore this email and your password stays the same.")
     else:
@@ -1053,9 +1116,9 @@ def test_email(request: Request):
     me_ = _admin(request)
     if not mailer.ready():
         raise HTTPException(400, "No email service is set up yet. Add the PEAKCUT_SMTP settings to .env first.")
-    mailer.send(me_.email, "PeakCut test email", "Your emails are working",
-                "This is a test from your PeakCut server. Account emails like this one will now reach people.",
-                "Open PeakCut", config.PUBLIC_URL + "/app", "You can ignore this message.")
+    mailer.send(me_.email, "Clipping Studio test email", "Your emails are working",
+                "This is a test from your Clipping Studio server. Account emails like this one will now reach people.",
+                "Open Clipping Studio", config.PUBLIC_URL + "/app", "You can ignore this message.")
     return {"sent_to": me_.email}
 
 
@@ -1385,7 +1448,7 @@ def storage_open(request: Request):
     from . import storage
     _admin(request)
     if not _on_this_computer(request):
-        raise HTTPException(400, "The folder can only be opened on the computer PeakCut runs on.")
+        raise HTTPException(400, "The folder can only be opened on the computer Clipping Studio runs on.")
     try:
         storage.open_folder()
     except OSError as e:
@@ -1398,7 +1461,7 @@ def storage_pick(request: Request):
     from . import storage
     _admin(request)
     if not _on_this_computer(request):
-        raise HTTPException(400, "Type the folder's path instead: a folder window can only be shown on the computer PeakCut runs on.")
+        raise HTTPException(400, "Type the folder's path instead: a folder window can only be shown on the computer Clipping Studio runs on.")
     return {"path": storage.pick_folder()}
 
 
@@ -1465,7 +1528,7 @@ def test_alert():
         auth_problem = str(e)
     if auth_problem:
         raise HTTPException(429, auth_problem)
-    problems = alerts.send("PeakCut: test message. Alerts are working.")
+    problems = alerts.send("Clipping Studio: test message. Alerts are working.")
     if problems:
         raise HTTPException(400, "; ".join(problems))
     return {"ok": True}
@@ -1522,10 +1585,227 @@ def admin_delete_user(request: Request, uid: str, body: dict = Body(...)):
     return {"ok": True}
 
 
+# ================================================================ campaigns, Content Rewards, playbooks, insights
+def _brain_watch():
+    """Tell the owner (bell, Discord, Telegram) when the Claude Code session stops answering, and when it is back."""
+    was = None
+    while True:
+        time.sleep(60)
+        if ai.provider() != "claude_session":
+            was = None
+            continue
+        now = bridge.connected()
+        if was is not None and now != was:
+            for uid in auth.user_ids():
+                with ctx.as_user(uid):
+                    alerts.notify("the Claude Code session (the brain) is connected again." if now else
+                                  "the Claude Code session (the brain) stopped answering. Videos wait; live checks are skipped. "
+                                  "Run start.cmd to start it.", kind="account")
+        was = now
+
+
+def _campaign_or_404(cid):
+    c = campaigns.get(cid)
+    if not c:
+        raise HTTPException(404, "No such campaign")
+    return c
+
+
+def _clip_or_404(jid, cid):
+    job = _job_or_404(jid)
+    clip = next((c for c in job["clips"] if c["id"] == cid), None)
+    if not clip:
+        raise HTTPException(404, "No such clip")
+    return job, clip
+
+
+@app.get("/api/campaigns")
+def list_campaigns_api():
+    needs = [{"id": c["id"], "name": c["name"], "options": [{"id": x["id"], "name": x["name"], "rate_per_1k": x["rate_per_1k"],
+              "budget_left": x["budget_left"], "brief": x["brief"][:400]} for x in campaigns.for_creator(c["id"])]}
+             for c in creators.all_creators() if campaigns.needs_choice(c["id"])]
+    return {"campaigns": campaigns.all_campaigns(), "stats": campaigns.stats(jobs.list_jobs(), posting._mine()),
+            "cr": cr.status(), "needs_choice": needs, "watchlist": [{"id": c["id"], "name": c["name"], "priority": c.get("priority", 0),
+            "recording": bool(live.active_for(c["id"]))} for c in live.watchlist()]}
+
+
+@app.post("/api/campaigns")
+def new_campaign(body: dict = Body(...)):
+    try:
+        return campaigns.create(body)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/campaigns/{cid}")
+def edit_campaign(cid: str, body: dict = Body(...)):
+    _campaign_or_404(cid)
+    try:
+        return campaigns.update(cid, body)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/campaigns/{cid}")
+def delete_campaign(cid: str):
+    if not campaigns.delete(cid):
+        raise HTTPException(404, "No such campaign")
+    return {"ok": True}
+
+
+@app.post("/api/campaigns/import")
+def import_campaign(body: dict = Body(...)):
+    _throttle("crimport:" + ctx.uid(), 10, 600, "Give it a few minutes: Content Rewards is read gently.")
+    try:
+        return cr.import_campaign(str(body.get("url") or "")[:300], body.get("id") or None)
+    except (ValueError, cr.Stop) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "Couldn't read Content Rewards: " + safe.friendly(e, 200))
+
+
+@app.get("/api/cr/list")
+def cr_list(where: str = "discover"):
+    _throttle("crlist:" + ctx.uid(), 6, 600, "Give it a few minutes: Content Rewards is read gently.")
+    try:
+        return cr.list_campaigns("joined" if where == "joined" else "discover")
+    except cr.Stop as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "Couldn't read Content Rewards: " + safe.friendly(e, 200))
+
+
+@app.post("/api/cr/login")
+def cr_login():
+    if not cr._available():
+        raise HTTPException(400, "Playwright is not installed. Run: pip install -r requirements.txt")
+    cr.open_login()
+    return cr.status()
+
+
+@app.post("/api/cr/check")
+def cr_check():
+    try:
+        cr.check_session()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, safe.friendly(e, 200))
+    return cr.status()
+
+
+@app.post("/api/jobs/{jid}/clips/{cid}/campaign")
+def clip_campaign(jid: str, cid: str, body: dict = Body(...)):
+    job, clip = _clip_or_404(jid, cid)
+    want = str(body.get("campaign") or "")
+    if want and not campaigns.get(want):
+        raise HTTPException(404, "No such campaign")
+    if (clip.get("cr") or {}).get("state") in ("submitted", "paid"):
+        raise HTTPException(400, "This clip was already submitted to its campaign.")
+    camp = campaigns.get(want)
+    clip.update(campaign=want or None, disclosure=camp["disclosure"] if camp else "", compliance=None, compliance_override=False,
+                campaign_needed=False)
+    if camp:
+        clip.setdefault("cr", {"state": "rendered"})
+        threading.Thread(target=ctx.bind(posting.campaign_clip_ready), args=(job, clip), daemon=True).start()
+    jobs.save(job)
+    return jobs.public(job)
+
+
+@app.post("/api/jobs/{jid}/clips/{cid}/campaign-action")
+def clip_campaign_action(jid: str, cid: str, body: dict = Body(...)):
+    job, clip = _clip_or_404(jid, cid)
+    act = str(body.get("action") or "")
+    try:
+        if act == "approve":
+            clip["approved"] = True
+            campaigns.track(clip, "approved")
+        elif act == "override":
+            clip["compliance_override"] = bool(body.get("on", True))
+        elif act == "recheck":
+            clip["compliance"] = None
+            threading.Thread(target=ctx.bind(posting.campaign_clip_ready), args=(job, clip), daemon=True).start()
+        elif act == "track":
+            st = str(body.get("state") or "")
+            url = str(body.get("post_url") or "").strip()[:500] or None
+            if url and not re.match(r"^https?://", url):
+                raise ValueError("The post link must start with http:// or https://")
+            pv = body.get("payable_views")
+            campaigns.track(clip, st, post_url=url, note=str(body.get("note") or "")[:300] or None,
+                            payable_views=int(pv) if pv not in (None, "") else None)
+        elif act == "submit":
+            _throttle("crsubmit:" + ctx.uid(), 10, 600)
+            try:
+                cr.submit(job, clip)
+            except cr.Stop as e:
+                raise ValueError(str(e))
+        else:
+            raise HTTPException(404)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    jobs.save(job)
+    return jobs.public(job)
+
+
+@app.post("/api/live/link")
+def live_from_link(body: dict = Body(...)):
+    """A live link pasted into the main box: record it in the workspace of the creator it belongs to, made now if
+    there is none yet."""
+    _need_verified()
+    url = live.normalize(str(body.get("url") or "")[:300])
+    if not media.site_allowed(url):
+        raise HTTPException(400, "Channel links must be from YouTube, Twitch or Kick.")
+    meta = media._PREVIEWS.get(str(body.get("url") or "").strip()) or {}
+    handle = campaigns._handle(url) or campaigns._handle(meta.get("channel_url") or "")
+    c = next((c for c in creators.all_creators() for u in (c.get("channels") or {}).values()
+              if handle and campaigns._handle(u) == handle), None)
+    if not c:
+        key = creators.platform_key(url)
+        chan = meta.get("channel_url") or url.rsplit("/live", 1)[0]
+        name = (meta.get("uploader") or handle or "New creator")[:60]
+        try:
+            c = creators.create({"name": name, "channels": {key: chan}, "channel": chan})
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        profiles.refresh(c["id"], force=True)
+    try:
+        job = live.start_session(c, url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"creator": c["id"], "job": jobs.public(job)}
+
+
+@app.get("/api/playbooks")
+def list_playbooks():
+    return list(playbooks.library().values())
+
+
+@app.get("/api/insights")
+def get_insights():
+    return insights.summary()
+
+
+@app.post("/api/insights/review")
+def insights_review():
+    _throttle("review:" + ctx.uid(), 3, 3600)
+    try:
+        return insights.run_review()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "The AI did not answer: " + safe.friendly(e, 200))
+
+
+@app.post("/api/insights/review/{item}")
+def insights_decide(item: int, body: dict = Body(...)):
+    try:
+        return insights.decide(item, str(body.get("decision") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 def main():
-    print(f"\n  PeakCut is running:  {config.PUBLIC_URL}\n")
+    print(f"\n  Clipping Studio is running:  {config.PUBLIC_URL}\n")
     if not config.ACCOUNTS and (config.HTTPS or config.HOST not in ("127.0.0.1", "localhost", "::1")):
-        print("  Sign-in is off, so anyone who can reach this address can use PeakCut and its AI key.\n"
+        print("  Sign-in is off, so anyone who can reach this address can use Clipping Studio and its AI key.\n"
               "  On a server other people can reach, set PEAKCUT_ACCOUNTS=1 in .env.\n", flush=True)
     if config.env("PEAKCUT_AUTO_RELOAD") == "1":
         # restart by itself whenever the server code changes (pages in web/ never need a restart)

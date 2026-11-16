@@ -78,7 +78,10 @@ def install_fonts():
             shutil.copyfile(f, config.FONTS_DIR / f.name)
 
 
-LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)"}
+LAYOUTS = {"blur": "Full frame + blurred fill", "zoom": "Zoomed in + blurred fill", "crop": "Fill the screen (centre crop)",
+           "split": "Camera on top, gameplay below", "fullcam": "Camera fills the screen"}
+CAM_H = 760          # split layout: height of the camera panel; captions sit on the line below it
+TAG = {"font": "Poppins ExtraBold", "size": 40, "ink": "FFFFFF", "box": "000000", "alpha": "40", "x": 64, "y": 96}
 
 
 def _ts(t):
@@ -108,8 +111,16 @@ def _groups(words, per):
     return out
 
 
-def geometry(src_w, src_h, layout):
+def geometry(src_w, src_h, layout, facecam=None):
     """Where the video sits in the 1080x1920 frame, and where hook and captions go."""
+    if layout in ("split", "fullcam") and not facecam:
+        layout = "crop"  # no camera box set on the creator: fill the screen instead
+    if layout == "split" and src_h < src_w:
+        return layout, H, 230, CAM_H
+    if layout == "split":
+        layout = "crop"  # a vertical source has no room for two panels
+    if layout == "fullcam":
+        return layout, H, 300, 1380
     if src_h >= src_w and layout != "crop":
         layout = "crop"  # already vertical or square: nothing to gain from a blurred fill
     if layout == "blur":
@@ -155,7 +166,32 @@ def _hook_events(hook, dur, y):
     return ev
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y) -> str:
+def _tag_events(text, dur):
+    """The paid-partnership tag: small, top left, on screen from the first frame to the last."""
+    text = _clean(text)
+    if not text:
+        return []
+    f, size = _Font.get(TAG["font"]), TAG["size"]
+    w, h = f.width(text, size) + 36, f.em(size) * 1.25 + 14
+    x0, y0, x1, y1 = TAG["x"], TAG["y"], TAG["x"] + w, TAG["y"] + h
+    box = f"m {x0:.0f} {y0:.0f} l {x1:.0f} {y0:.0f} l {x1:.0f} {y1:.0f} l {x0:.0f} {y1:.0f}"
+    span = f"{_ts(0)},{_ts(dur)}"
+    return [f"Dialogue: 5,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\c&H{TAG['box']}&\\1a&H{TAG['alpha']}&\\p1}}{box}{{\\p0}}",
+            f"Dialogue: 6,{span},Hook,,0,0,0,,{{\\an5\\pos({(x0 + x1) / 2:.0f},{(y0 + y1) / 2 - f.cap_shift(size):.0f})"
+            f"\\fs{size}\\c&H{TAG['ink']}&}}{text}"]
+
+
+def _context_events(text, dur, y):
+    """One line saying what is going on, under the tag and above the hook, for the whole clip."""
+    text = _clean(text)
+    if not text:
+        return []
+    f, size = _Font.get(TAG["font"]), 44
+    size = max(28, min(size, int(size * 960 / max(1.0, f.width(text, size)))))
+    return [f"Dialogue: 5,{_ts(0)},{_ts(dur)},Cap,,0,0,0,,{{\\an5\\pos({W // 2},{y:.0f})\\fs{size}\\bord4\\c&HFFFFFF&}}{text}"]
+
+
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, disclosure="", context="") -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -175,7 +211,7 @@ Style: Hook,{HOOK['font']},{HOOK['size']},&H00{HOOK['ink']},&H00{HOOK['ink']},&H
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
-    ev = _hook_events(_clean(hook), dur, hook_y)
+    ev = _hook_events(_clean(hook), dur, hook_y) + _tag_events(disclosure, dur) + _context_events(context, dur, max(190, hook_y - 120))
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -227,10 +263,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return head + "\n".join(ev) + "\n"
 
 
-def _filter(layout, fg_h):
+def _cam_box(facecam, src_w, src_h):
+    x, y, w, h = facecam
+    return int(src_w * w) // 2 * 2, int(src_h * h) // 2 * 2, int(src_w * x), int(src_h * y)
+
+
+def _filter(layout, fg_h, facecam=None, src_w=0, src_h=0, inp="[0:v]"):
+    if layout == "split":
+        cw, ch, cx, cy = _cam_box(facecam, src_w, src_h)
+        return (f"{inp}fps={config.OUT_FPS},split=2[c][g];"
+                f"[c]crop={cw}:{ch}:{cx}:{cy},scale={W}:{CAM_H}:force_original_aspect_ratio=increase,crop={W}:{CAM_H}[cam];"
+                f"[g]scale={W}:{H - CAM_H}:force_original_aspect_ratio=increase,crop={W}:{H - CAM_H}[game];"
+                f"[cam][game]vstack,setsar=1[v0];")
+    if layout == "fullcam":
+        cw, ch, cx, cy = _cam_box(facecam, src_w, src_h)
+        rh = int(min(src_h, max(ch * 1.6, ch + 2))) // 2 * 2                  # a 9:16 window around the camera
+        rw = min(src_w, int(rh * 9 / 16)) // 2 * 2
+        rh = min(src_h, int(rw * 16 / 9)) // 2 * 2
+        x0 = max(0, min(src_w - rw, int(cx + cw / 2 - rw / 2)))
+        y0 = max(0, min(src_h - rh, int(cy + ch / 2 - rh / 2)))
+        return f"{inp}fps={config.OUT_FPS},crop={rw}:{rh}:{x0}:{y0},scale={W}:{H},setsar=1[v0];"
     if layout == "crop":
-        return f"[0:v]fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
-    return (f"[0:v]fps={config.OUT_FPS},split=2[a][b];"
+        return f"{inp}fps={config.OUT_FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[v0];"
+    return (f"{inp}fps={config.OUT_FPS},split=2[a][b];"
             f"[a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=6:2,"
             f"scale={W}:{H},eq=brightness=-0.14:saturation=1.15[bg];"
             f"[b]scale={W}:{fg_h}:force_original_aspect_ratio=increase,crop={W}:{fg_h}[fg];"
@@ -245,30 +300,54 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start, end = clip["start"], clip["end"]
-    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"))
-    ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                    clip.get("highlight_words", []), hook_y, cap_y)
+    facecam = clip.get("facecam") or None
+    layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), facecam)
+    context = clip.get("context", "") if clip.get("context_line") else ""
+    # result first: the last few seconds play before the clip, then the clip from its setup
+    teaser = min(float(clip.get("teaser") or 0), (end - start) / 3)
+    if teaser >= 1.0:
+        t0 = end - teaser
+        shown = ([dict(w, s=w["s"] - t0, e=w["e"] - t0) for w in words if t0 <= w["s"] < end]
+                 + [dict(w, s=w["s"] - start + teaser, e=w["e"] - start + teaser) for w in words if start - 0.05 <= w["s"] < end])
+        ass = build_ass(shown, 0.0, end - start + teaser, clip.get("hook", ""), clip.get("style", "bounce"),
+                        clip.get("highlight_words", []), hook_y, cap_y, clip.get("disclosure", ""), context)
+    else:
+        teaser = 0.0
+        ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
+                        clip.get("highlight_words", []), hook_y, cap_y, clip.get("disclosure", ""), context)
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, facecam, src_w, src_h, teaser)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str) -> dict:
+def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
+               facecam=None, src_w=0, src_h=0, teaser=0.0) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
-    fc = _filter(layout, fg_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
-    base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+    norm = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    if teaser:
+        joined = (f"[1:v]fps={config.OUT_FPS},setpts=PTS-STARTPTS[tv];[1:a:0]asetpts=PTS-STARTPTS[ta];"
+                  f"[0:v]fps={config.OUT_FPS},setpts=PTS-STARTPTS[mv];[0:a:0]asetpts=PTS-STARTPTS[ma];"
+                  f"[tv][ta][mv][ma]concat=n=2:v=1:a=1[cv][ca];[ca]{norm}[a];")
+        fc = joined + _filter(layout, fg_h, facecam, src_w, src_h, "[cv]") + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
+                "-ss", f"{end - teaser:.2f}", "-t", f"{teaser:.2f}", "-i", str(src),
+                "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
+    else:
+        fc = _filter(layout, fg_h, facecam, src_w, src_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
+                "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", norm,
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
     encoders = []
     if _qsv_ok is not False:
         encoders.append(("qsv", ["nv12", "-c:v", "h264_qsv", "-global_quality", "23", "-preset", "fast"]))
@@ -286,7 +365,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             _qsv_ok = False
     else:
         raise RuntimeError(f"Render failed: {err}")
-    cover_t = min(1.2, (end - start) / 2)
+    cover_t = min(1.2, (end - start + teaser) / 2)
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", f"{name}.mp4", "-frames:v", "1",
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):

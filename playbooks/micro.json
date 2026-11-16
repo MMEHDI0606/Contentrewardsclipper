@@ -1,0 +1,33 @@
+{
+ "id": "micro",
+ "name": "Micro",
+ "grade": "B",
+ "share": 1.0,
+ "when": {
+  "categories": [
+   "funny",
+   "fail",
+   "shock",
+   "clutch"
+  ],
+  "max_len": 15
+ },
+ "hook": {
+  "archetype": "mid_action",
+  "rules": "Two to four words; the first frame is the event."
+ },
+ "edit": {
+  "layout": "crop",
+  "max_len": 15
+ },
+ "captions": {
+  "style": "hype",
+  "per": 2
+ },
+ "variants": [
+  {
+   "id": "a"
+  }
+ ],
+ "about": "7 to 15 seconds, one beat, no setup. Best for TikTok."
+}

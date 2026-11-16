@@ -1,0 +1,29 @@
+{
+ "id": "plain",
+ "name": "Plain",
+ "grade": "control",
+ "share": 1.0,
+ "when": {
+  "categories": []
+ },
+ "hook": {
+  "archetype": "surprise",
+  "rules": "A short, true, unexpected statement about what happens."
+ },
+ "edit": {},
+ "captions": {
+  "style": "bounce"
+ },
+ "variants": [
+  {
+   "id": "a"
+  },
+  {
+   "id": "b",
+   "captions": {
+    "style": "clean"
+   }
+  }
+ ],
+ "about": "The studio's original treatment, unchanged. Always kept as the control."
+}

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import alerts, auth, brain, config, creators, ctx, jobs, load, media, transcribe, usage
+from . import alerts, auth, brain, bridge, campaigns, config, creators, ctx, jobs, load, media, transcribe, usage
 
 SESSIONS: dict = {}
 SEG_SEC = 6           # length of each buffer piece
@@ -356,8 +356,10 @@ class Session:
         usage.set_context(self.job["creator"], self.job["title"] or "Live stream")
         title, up = self.job["title"], self.job["uploader"]
         try:
-            cands, tok = brain.judge_transcript(win, ws, now, title, up, st["min_len"], st["max_len"], self.job["clips"],
-                                                n=1 if every <= 2 else 2, must=must)  # Auto (0) asks for one
+            brief = campaigns.brief_for(self.job)
+            cands, tok = brain.judge_transcript(win, ws, now, title, up, brief.get("min_len", st["min_len"]),
+                                                brief.get("max_len", st["max_len"]), self.job["clips"],
+                                                n=1 if every <= 2 else 2, must=must, brief=brief)  # Auto (0) asks for one
         except Exception as e:  # noqa: BLE001
             self.job["ai"]["last_error"] = str(e)[-200:]
             return self._verdict(verdict, "AI error: " + str(e)[-80:])
@@ -446,6 +448,7 @@ class Session:
         self.n += 1
         c.update(id=f"clip{self.n:03d}", style=self.settings["style"], layout=self.settings["layout"],
                  status="queued", version=0, made_at=time.time())
+        jobs.prepare_clip(self.job, c, has_chat=bool(self.chat_total))
         with self.lock:
             self.job["clips"].append(c)
         jobs.save(self.job)
@@ -539,6 +542,7 @@ class Session:
 
     def _analyze(self):
         cid = self.job["creator"]
+        bridge.tag(self.job["id"])
         started = False
         while True:
             busy = False
@@ -650,7 +654,7 @@ def start_session(creator: dict, url=None) -> dict:
     if len(active_mine()) >= config.MAX_LIVE_PER_USER:
         raise ValueError(f"You're already recording {len(active_mine())} streams, the most this server allows at once. Stop one first.")
     if len(active()) >= config.MAX_LIVE_TOTAL or (active() and load.busy()):
-        raise ValueError("PeakCut is recording as many streams as it can right now. Try again in a little while.")
+        raise ValueError("Clipping Studio is recording as many streams as it can right now. Try again in a little while.")
     from . import tools
     if tools.missing():
         raise ValueError(tools.HELP)
@@ -663,17 +667,25 @@ def start_session(creator: dict, url=None) -> dict:
 
 
 def _watch_user(uid):
-    """Start recording any of this user's auto-record creators who have gone live."""
-    from . import profiles
+    """Start recording any of this user's watched creators who have gone live, in the order the owner set."""
     with ctx.as_user(uid):
         try:
-            todo = [c for c in creators.all_creators() if c["auto_watch"] and c["channel"]]
+            todo = watchlist()
             if not todo:
                 return
         except Exception:  # noqa: BLE001
             return
         for c in todo:
             _watch_one(c)
+
+
+def watchlist() -> list:
+    """Creators to record when they go live: those set to auto-record by hand, plus those linked to a campaign that
+    is active and set to record automatically. Lowest priority number first, then by name."""
+    by_campaign = {cid for c in campaigns.all_campaigns() if c["auto_record"] and campaigns.accepting(c)
+                   and c["autonomy"] != "off" for cid in c["creators"]}
+    got = [c for c in creators.all_creators() if c["channel"] and (c["auto_watch"] or c["id"] in by_campaign)]
+    return sorted(got, key=lambda c: (c.get("priority") or 0, c["name"].lower()))
 
 
 def check_now(cid):
@@ -684,7 +696,7 @@ def check_now(cid):
         from . import profiles
         with ctx.as_user(uid):
             c = creators.get(cid)
-            if not c or not c["auto_watch"] or not c["channel"]:
+            if not c or not c["channel"] or c["id"] not in {w["id"] for w in watchlist()}:
                 return
             for url in c.get("channels", {}).values():
                 profiles._live.pop(url.rstrip("/").lower(), None)     # a fresh answer, not one from two minutes ago
@@ -736,7 +748,7 @@ def watch_loop():
             list(pool.map(_watch_user, auth.user_ids()))
         except Exception:  # noqa: BLE001
             pass
-        time.sleep(max(15, 120 - (time.time() - t0)))
+        time.sleep(max(15, config.WATCH_EVERY_MIN * 60 - (time.time() - t0)))
 
 
 def _resume_recordings(paused):

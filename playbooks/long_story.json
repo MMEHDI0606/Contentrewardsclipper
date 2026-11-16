@@ -1,0 +1,32 @@
+{
+ "id": "long_story",
+ "name": "Long story",
+ "grade": "A (length) / C",
+ "share": 1.0,
+ "when": {
+  "categories": [
+   "story",
+   "take"
+  ],
+  "min_len": 40
+ },
+ "hook": {
+  "archetype": "question",
+  "rules": "The question the story answers, true to how it ends."
+ },
+ "edit": {
+  "layout": "crop",
+  "context_line": true,
+  "min_len": 40,
+  "max_len": 60
+ },
+ "captions": {
+  "style": "clean"
+ },
+ "variants": [
+  {
+   "id": "a"
+  }
+ ],
+ "about": "45 to 60 seconds with a context line on screen throughout. Best for YouTube Shorts."
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "mcp__peakcut__next_request",
+      "mcp__peakcut__submit_answer",
+      "CronCreate",
+      "CronList",
+      "CronDelete",
+      "ScheduleWakeup"
+    ],
+    "deny": [
+      "Bash",
+      "PowerShell",
+      "Read",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Monitor",
+      "mcp__claude_ai_*"
+    ]
+  },
+  "disableClaudeAiConnectors": true,
+  "autoMemoryEnabled": false,
+  "includeCoAuthoredBy": false
+}

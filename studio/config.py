@@ -65,7 +65,7 @@ def _move_folder(old: Path, new: Path) -> bool:
         return True
     items = list(old.iterdir())
     if items:
-        print(f"\n  Moving PeakCut's folder to {new} ({len(items)} things). This is done once and can take a while...", flush=True)
+        print(f"\n  Moving Clipping Studio's folder to {new} ({len(items)} things). This is done once and can take a while...", flush=True)
     done = True
     for item in items:
         target = new / item.name
@@ -107,9 +107,9 @@ def _data_folder():
     try:
         new.mkdir(parents=True, exist_ok=True)
     except OSError:
-        raise SystemExit(f"\n  PeakCut's folder is set to {new}, and that can't be reached right now.\n"
-                         f"  Connect that drive and start PeakCut again, or delete {STORAGE_FILE} to go back to the\n"
-                         f"  folder inside PeakCut (your videos and clips stay where they are).\n")
+        raise SystemExit(f"\n  Clipping Studio's folder is set to {new}, and that can't be reached right now.\n"
+                         f"  Connect that drive and start Clipping Studio again, or delete {STORAGE_FILE} to go back to the\n"
+                         f"  folder inside Clipping Studio (your videos and clips stay where they are).\n")
     if chosen.get("move_from"):
         if _move_folder(Path(chosen["move_from"]), new):
             STORAGE_FILE.write_text(json.dumps({"path": str(new)}, indent=1), encoding="utf-8")
@@ -151,8 +151,8 @@ SESSION_DAYS = int(env("PEAKCUT_SESSION_DAYS", "30"))
 ACCOUNTS = env("PEAKCUT_ACCOUNTS", "0") == "1"
 # The two buttons along the top of the dashboard: the project's code, and where to follow its maker (feedback goes
 # there too). Set either to an empty value to hide that button, or point them at your own pages in a fork.
-REPO_URL = env("PEAKCUT_REPO_URL", "https://github.com/haziqahmedqasmi/peakcut").strip()
-FOLLOW_URL = env("PEAKCUT_FOLLOW_URL", "https://www.instagram.com/haziq.builds/").strip()
+REPO_URL = env("PEAKCUT_REPO_URL", "").strip()
+FOLLOW_URL = env("PEAKCUT_FOLLOW_URL", "").strip()
 
 # ---------------------------------------------------------------- limits (per user, and for the whole server)
 # Your own PeakCut has no limits unless you set them: 0 (the default) means "none" for every limit below. The
@@ -180,6 +180,11 @@ MAX_USER_GB = _limit("PEAKCUT_MAX_USER_GB")                      # disk space on
 MAX_CREATORS = int(_limit("PEAKCUT_MAX_CREATORS"))               # creators one account may add
 ALLOWED_SITES = tuple(s.strip().lower() for s in env(
     "PEAKCUT_ALLOWED_SITES", "youtube.com,youtu.be,twitch.tv,kick.com").split(",") if s.strip())
+
+# ---------------------------------------------------------------- campaigns (Content Rewards and similar)
+CR_FEE = max(0.0, min(0.9, float(env("PEAKCUT_CR_FEE", "0.10"))))      # the platform's cut of CPM payouts, for estimates
+WATCH_EVERY_MIN = max(1, int(env("PEAKCUT_WATCH_EVERY_MIN", "2")))    # how often watched channels are checked for going live
+CR_URL = env("PEAKCUT_CR_URL", "https://contentrewards.com").rstrip("/")
 
 # ---------------------------------------------------------------- AI (bring your own key: see studio/ai.py)
 # These are the starting values. Whatever is saved from the dashboard (Settings, AI) is used instead.

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import json
 
-from . import accounts, alerts, config, creators, ctx, jobs, live
+from . import accounts, alerts, campaigns, config, creators, ctx, jobs, live
 
 _lock = threading.RLock()
 _FILE = config.DATA_DIR / "posts.json"
@@ -56,6 +56,17 @@ def _next_slot(account_id, gap_min, cap):
 
 def enqueue(job, clip, account_ids, now=False) -> list:
     c = creators.get(job["creator"]) or creators.DEFAULTS
+    why = campaigns.postable(clip)
+    if why:
+        raise ValueError(why)
+    if clip.get("campaign"):
+        # a campaign clip goes to one account only: the same file on two accounts looks like reposted content
+        used = {p["account"] for p in _mine() if p["job"] == job["id"] and p["clip"] == clip["id"] and p["status"] in OPEN + ("posted",)}
+        if used or len(account_ids) > 1:
+            if used and set(account_ids) <= used:
+                return []
+            raise ValueError("A campaign clip is posted to one account only. Pick a single account.")
+        clip["approved"] = True
     made = []
     with _lock:
         for aid in account_ids:
@@ -80,6 +91,9 @@ def enqueue(job, clip, account_ids, now=False) -> list:
 
 def on_clip_ready(job, clip):
     """Called once when a clip first finishes rendering."""
+    if clip.get("campaign"):
+        threading.Thread(target=ctx.bind(campaign_clip_ready), args=(job, clip), daemon=True).start()
+        return
     c = creators.get(job["creator"])
     if not c or not c["autopost"] or not c["accounts"]:
         return
@@ -90,9 +104,40 @@ def on_clip_ready(job, clip):
         creators.log(c["id"], f"Queued for {len(made)} account(s): {clip.get('title') or clip.get('hook')}")
 
 
+def campaign_clip_ready(job, clip):
+    """A campaign clip is finished: check it against the brief, then do what the campaign allows on its own."""
+    clip["compliance"] = campaigns.check(job, clip)
+    jobs.save(job)
+    camp = campaigns.get(clip["campaign"])
+    if not camp:
+        return
+    name = clip.get("title") or clip.get("hook") or clip["id"]
+    if not clip["compliance"]["ok"]:
+        creators.log(job.get("creator"), f"Campaign check failed for {name}: {'; '.join(clip['compliance']['reasons'])[:200]}")
+        alerts.notify(f"a clip for {camp['name']} needs a look: it failed the campaign check ({name}).", kind="post")
+        return
+    if camp["autonomy"] in ("post", "submit") and clip.get("score", 0) >= camp["post_min_score"] and not accounts.settings()["paused"]:
+        c = creators.get(job.get("creator") or job.get("source_creator")) or {}
+        ok_platforms = camp["platforms"] or list(accounts.PLATFORM_NAMES)
+        accts = [a for a in c.get("accounts", []) if (accounts.get(a) or {}).get("platform") in ok_platforms]
+        if accts:
+            try:
+                made = enqueue(job, clip, accts[:1])
+                if made:
+                    creators.log(job.get("creator"), f"Queued for {made[0]['account_name']} ({camp['name']}): {name}")
+            except ValueError as e:
+                creators.log(job.get("creator"), f"Not queued: {e}")
+
+
 def _caption(clip, creator):
-    tags = " ".join("#" + h for h in clip.get("hashtags", []))
-    return "\n\n".join(x for x in (clip.get("description", ""), tags, creator.get("post_footer", "")) if x)
+    tags = clip.get("hashtags", [])
+    camp = campaigns.get(clip.get("campaign"))
+    extra = []
+    if camp:       # the campaign's required text, tags and disclosure come last and are never dropped
+        tags = [t for t in tags if t.lower() not in {x.lower() for x in camp["hashtags"]}][:5] + camp["hashtags"]
+        extra = [camp["required_text"], camp["disclosure"]]
+    tags = " ".join("#" + h for h in tags)
+    return "\n\n".join(x for x in [clip.get("description", ""), tags, creator.get("post_footer", "")] + extra if x)
 
 
 def _post(p):
@@ -117,6 +162,14 @@ def _post(p):
             raise RuntimeError("That kind of account is no longer supported.")
         p.update(status="posted", posted_at=time.time(), remote_id=rid, url=url, error=None)
         creators.log(p["creator"], f"Posted to {acc['name']}: {title}")
+        if clip.get("campaign"):
+            campaigns.track(clip, "posted", post_url=url, account=acc["name"], platform=acc["platform"])
+            jobs.save(job)
+            camp = campaigns.get(clip["campaign"])
+            alerts.notify(f"posted to {acc['name']} for {camp['name'] if camp else 'a campaign'}: submit it within 30 minutes ({title}).", kind="post")
+            if camp and camp["autonomy"] == "submit":
+                from . import cr
+                cr.queue_submit(job["id"], clip["id"])
     except Exception as e:  # noqa: BLE001
         p["tries"] += 1
         p["error"] = str(e)[-300:]
@@ -148,6 +201,21 @@ def _run():
                 pass
 
 
+SNAPS = (("1h", 3600), ("6h", 6 * 3600), ("24h", 86400), ("3d", 3 * 86400), ("7d", 7 * 86400))
+
+
+def _snapshot(recent):
+    """Views at about 1 hour, 6 hours, 1 day, 3 days and 7 days after posting: the curve, not just the total."""
+    for p in recent:
+        if p.get("views") is None or not p.get("posted_at"):
+            continue
+        age = time.time() - p["posted_at"]
+        snaps = p.setdefault("snaps", {})
+        for label, sec in SNAPS:
+            if age >= sec and label not in snaps:
+                snaps[label] = p["views"]
+
+
 def _stats_for(recent):
     for aid in {p["account"] for p in recent if p["platform"] == "youtube"}:
         acc = accounts.get(aid)
@@ -169,7 +237,9 @@ def _stats():
         for uid in {p.get("user") for p in _posts if p.get("user")}:
             try:
                 with ctx.as_user(uid):
-                    _stats_for([p for p in _mine() if p["status"] == "posted" and time.time() - p["posted_at"] < 14 * 86400])
+                    recent = [p for p in _mine() if p["status"] == "posted" and time.time() - p["posted_at"] < 14 * 86400]
+                    _stats_for(recent)
+                    _snapshot(recent)
             except Exception:  # noqa: BLE001
                 pass
         _save()
@@ -238,7 +308,7 @@ def overview() -> dict:
 
 def digest_text() -> str:
     o = overview()
-    lines = ["PeakCut daily summary"]
+    lines = ["Clipping Studio daily summary"]
     for r in o["creators"]:
         lines.append(f"- {r['name']}: {r['state']}, {r['clips_today']} clips today, {r['posted_today']} posted today, "
                      f"{r['queued']} waiting, {r['failed']} failed, {r['views']} views")

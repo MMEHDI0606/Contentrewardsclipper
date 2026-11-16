@@ -30,3 +30,8 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# ---- clipping studio: the brain folder keeps its own Claude Code settings
+!brain/.claude/
+brain/node_modules/
+run/

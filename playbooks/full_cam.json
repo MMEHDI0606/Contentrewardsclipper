@@ -1,0 +1,20 @@
+{
+ "id": "full_cam",
+ "name": "Full cam",
+ "grade": "C",
+ "kind": "layout",
+ "share": 1.0,
+ "when": {
+  "needs": "facecam",
+  "categories": [
+   "funny",
+   "take",
+   "story",
+   "rage"
+  ]
+ },
+ "edit": {
+  "layout": "fullcam"
+ },
+ "about": "The streamer's face fills the frame. For reactions and just-chatting."
+}
