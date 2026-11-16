@@ -1,188 +1,139 @@
-# PeakCut
+# Clipping Studio
 
-Turn long videos and live streams into captioned vertical clips, ready to post. Free and open source: run it on
-your own computer or server, with your own AI key.
+Turn long videos and live streams into captioned vertical clips for paid clipping campaigns, on your own laptop.
+The AI work (finding moments, hooks, titles, the campaign check) is done by a Claude Code session running next to
+the app, on your normal Claude subscription. No API key is needed anywhere.
 
-Paste a YouTube, Twitch or Kick link (or upload a file) and PeakCut finds the moments worth clipping, cuts them to
-9:16, adds word-by-word captions and a hook, and can post them to your connected accounts. It can also record a
-creator's live stream and clip the highlights while the stream is still running.
+Paste a YouTube, Twitch or Kick link (or upload a file). Clipping Studio transcribes it on your machine, has the
+Claude session pick the moments worth clipping, cuts them to 9:16 with word-by-word captions and a hook, checks each
+clip against the campaign brief, and can post it and track it through to payment. Paste a live link and it records
+the stream and clips the highlights while it is still running.
+
+Built on [PeakCut](https://github.com/haziqahmedqasmi/PeakCut) (MIT).
 
 ## What it does
 
-- **Clips from any video.** Transcribes the audio, asks an AI which moments would hold a stranger's attention, and
-  renders each one with captions in one of three styles.
-- **Live clipping.** Records a stream into a rolling buffer and clips as it happens, using loudness, chat activity
-  and the transcript.
-- **Workspaces per creator.** Channels, clip settings, posting rules and an activity log for each creator you clip.
-- **Posting.** Connect YouTube, Instagram and TikTok in one click, then queue or auto-post finished clips, with
-  spacing and daily caps (see [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok) for the one-time setup).
-- **No sign-in on your own computer.** It opens straight into the dashboard. On a shared server, switch accounts on
-  (`PEAKCUT_ACCOUNTS=1`) for email or Google sign-in and an admin dashboard.
-- **Your own AI.** Gemini, OpenAI, Grok, Groq, OpenRouter, Claude, a local model through Ollama, or anything that
-  speaks the OpenAI chat format. No key at all also works: clips are then picked by loudness.
+- **Clips from any video.** Speech is transcribed locally; the Claude session reads the transcript and picks the
+  moments that would hold a stranger's attention.
+- **Live clipping.** Records streams and clips as they happen. Creators linked to an active campaign are recorded
+  automatically when they go live, in the order you set.
+- **Campaigns.** Import a Content Rewards campaign from its link, or add one by hand. Each creator can have a
+  default campaign; the brief steers which moments are picked.
+- **Campaign check.** Every finished clip is checked against the rules (length, disclosure, campaign still
+  accepting) and the brief. A clip that fails cannot be posted or submitted unless you press Override.
+- **Submission tracker.** Each clip moves through made, approved, posted, submitted, paid or rejected, with
+  estimated earnings after the platform fee. The Creator Terms are enforced in code: one campaign per post, no
+  resubmitting a rejected post, a warning before the 30-minute submit window closes.
+- **Playbooks.** Recipes for how a clip is presented (result first, best line first, camera over gameplay, full
+  camera and more), rotated so an account never looks templated. Stored as files in `playbooks/`.
+- **Results.** Views grouped by playbook, length, hour and campaign; account health; and a weekly review from the
+  Claude session whose suggestions you accept or reject. Nothing changes on its own.
+- **Posting.** YouTube, Instagram and TikTok, queued or automatic, with spacing and daily caps (see
+  [DEPLOY.md](DEPLOY.md#connecting-youtube-instagram-and-tiktok) for the one-time setup).
 
-## Quick start
+## What it never does
 
-You need Python 3.10 or newer and `ffmpeg`. On Windows: `winget install Gyan.FFmpeg`. On a Mac: `brew install ffmpeg`.
-On Linux: `sudo apt install ffmpeg`. PeakCut finds it by itself and tells you in the dashboard if it is missing.
+- Use an API key or read your Claude login. The brain is an ordinary Claude Code session you are signed in to.
+- Give the brain a shell, files or the web. It can only take the next request and send an answer.
+- Log in for you. You sign in to Content Rewards yourself, once, in a visible window.
+- Join campaigns, request payouts, run more than one account, hide itself, or do anything that inflates views.
 
-```bash
-git clone <this repository> peakcut
+## Set up (Windows)
+
+You need:
+
+- Python 3.10 or newer, and `ffmpeg` (`winget install Gyan.FFmpeg`)
+- Node.js 22.18 or newer (the brain's MCP server runs as TypeScript directly)
+- Claude Code (`npm install -g @anthropic-ai/claude-code`), signed in with your claude.ai account
+- Microsoft Edge (already on Windows; used to read Content Rewards pages)
+
+Then, in the project folder:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+cd brain; npm install; cd ..
 ```
 
-```bash
-cd peakcut
-```
+Make sure `ANTHROPIC_API_KEY` is **not** set, or Claude Code bills that key instead of your subscription.
 
-```bash
-pip install -r requirements.txt
-```
+## Start and stop
 
-Start the server:
+| What | How |
+|---|---|
+| Everything | double-click `start.cmd`: the app runs hidden, the brain opens in its own window, the dashboard opens in the browser |
+| App only, no AI | `start.cmd -NoBrain` |
+| Stop everything | `stop.cmd` |
 
-```bash
-python -m studio.server
-```
+The dashboard is at http://127.0.0.1:8765/app. The first start downloads the speech model (about 480 MB, once).
 
-The first start downloads the speech model by itself (about 480 MB, once).
+**First start of the brain:** its window asks "Do you trust the files in this folder?" with **No, exit** selected.
+Press the down arrow, then Enter. Its tools do not load until you do.
 
-Open http://127.0.0.1:8765. There is no sign-in: it opens straight into the dashboard. Go to **Settings, AI**, choose
-your AI service, paste your key and press **Save and test** (see [Choose your AI](#choose-your-ai)).
+A green dot and "Brain connected" at the bottom left of the dashboard means it is working. [RUNBOOK.md](RUNBOOK.md)
+covers what to do when it is not, the measurements so far, and what still needs checking.
 
-## Choose your AI
+## Other AI services
 
-PeakCut needs a chat model that can return JSON. The easy way is in the dashboard: **Settings, AI**. Pick the
-service, paste your key, press **Find models** to choose from the service's own list, then **Save and test**. The
-key is kept in the data folder on your machine and is never shown again.
-
-If you prefer a file (or run a server), the same three things can go in `.env`. What is saved in the dashboard wins:
-
-```ini
-PEAKCUT_AI_PROVIDER=gemini
-PEAKCUT_AI_MODELS=gemini-2.5-flash
-PEAKCUT_AI_KEY=your-key-here
-```
-
-| `PEAKCUT_AI_PROVIDER` | Service | Where to get a key |
-|---|---|---|
-| `gemini` | Google Gemini | https://aistudio.google.com/apikey |
-| `openai` | OpenAI | https://platform.openai.com/api-keys |
-| `xai` | Grok (xAI) | https://console.x.ai |
-| `groq` | Groq | https://console.groq.com/keys |
-| `openrouter` | OpenRouter (many models, one key) | https://openrouter.ai/keys |
-| `anthropic` | Claude | https://console.anthropic.com |
-| `ollama` | A model on your own machine, no key | https://ollama.com |
-| `custom` | Any OpenAI-compatible address: also set `PEAKCUT_AI_BASE_URL` | |
-
-- `PEAKCUT_AI_MODELS` is the model id exactly as the service names it. Model names change often, so check the
-  service's current list. Several ids separated by commas are tried in order, which gives you a fallback.
-- A fast, inexpensive model is the right choice. A one-hour video is read in about four requests.
-- You pay the AI service directly for what you use. The **AI usage** page in the app shows how many requests and
-  tokens each video took.
-- Speech to text does not use the AI service. It runs on your own machine, so audio never leaves it.
+`start.cmd` uses the Claude Code session. You can switch to Gemini, OpenAI, Grok, Groq, OpenRouter, the Claude API,
+a local model through Ollama, or any OpenAI-compatible service in **Settings, AI**: pick the service, paste a key,
+press **Save and test**. Speech to text never uses the AI service; audio stays on your machine.
 
 ## Settings
 
 Everything is set through environment variables, normally in a `.env` file next to this README.
-[`.env.example`](.env.example) lists every setting with a short explanation. The ones that matter first:
+[`.env.example`](.env.example) lists them. The ones specific to this version:
 
 | Setting | What it is for |
 |---|---|
-| `PEAKCUT_AI_PROVIDER`, `PEAKCUT_AI_MODELS`, `PEAKCUT_AI_KEY` | The AI that picks clips and writes titles (or set it in the dashboard) |
-| `PEAKCUT_ACCOUNTS` | `1` makes everyone sign in. Use it on any server other people can reach |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional: Sign in with Google, and connecting YouTube |
-| `PEAKCUT_SMTP_*`, `PEAKCUT_MAIL_FROM` | Optional: confirmation and password emails |
+| `PEAKCUT_AI_PROVIDER=claude_session` | Use the Claude Code session as the AI (`start.cmd` sets this) |
+| `PEAKCUT_BRAIN_BACKLOG` | How many requests may wait before the oldest live checks are skipped (default 4) |
+| `PEAKCUT_WATCH_EVERY_MIN` | How often watched creators are checked for going live, in minutes (default 2) |
+| `PEAKCUT_CR_FEE` | The platform fee taken from campaign earnings (default 0.10) |
 | `PEAKCUT_DATA` | Where videos, clips and the database are kept (default `./data`) |
 
-`.env`, the `secrets/` folder and all user data are ignored by git. Keep keys there, never in the code.
-
-## Admins
-
-This only matters with accounts switched on (`PEAKCUT_ACCOUNTS=1`); without them you are the owner and can do
-everything. An account is an admin only when the database says so. No email address is special in the code and no web request
-can change a role. Do it on the machine that runs PeakCut:
-
-```bash
-python -m studio.admin grant you@example.com
-```
-
-`revoke` and `list` work the same way. The admin dashboard is at `/admin` and answers "not found" to everyone else.
+Settings keep the `PEAKCUT_` prefix from the original project. `.env`, `secrets/`, `data/` and `run/` are ignored by
+git. Keep keys there, never in the code.
 
 ## How it is built
 
 | Part | What it is |
 |---|---|
-| `studio/` | The server: FastAPI, the clip pipeline, live recording, accounts |
-| `studio/ai.py` | The only file that talks to an AI service. Add a provider here |
-| `web/` | The pages: landing, sign-in, the app, the admin dashboard (plain HTML, CSS and JavaScript, no build step) |
+| `studio/` | The server: FastAPI, the clip pipeline, live recording, campaigns, posting |
+| `studio/bridge.py`, `brain/` | The request queue for the Claude session, and the small MCP server it talks through |
+| `studio/campaigns.py`, `studio/cr.py` | Campaigns and the check; Content Rewards through Playwright |
+| `studio/playbooks.py`, `playbooks/` | Clip recipes and their rotation |
+| `studio/insights.py` | The Results page and the weekly review |
+| `web/` | The pages, plain HTML, CSS and JavaScript, no build step |
+| `scripts/`, `start.cmd`, `stop.cmd` | Starting and stopping the app and the brain on Windows |
 | `tests/` | Tests that run against a throwaway copy of the app |
-| `deploy/`, `Dockerfile`, `docker-compose.yml` | One-server deployment with PostgreSQL and automatic HTTPS |
 
-Video work is done with `ffmpeg` and `yt-dlp`. Speech is transcribed with `sherpa-onnx` and the Parakeet model.
-Data is kept per user: accounts in the database (SQLite on your own computer, PostgreSQL on a server), videos and
-clips in each user's own folder. [AGENTS.md](AGENTS.md) is a short map of the code for contributors and AI coding
-assistants.
-
-## Where your videos and clips are kept
-
-Everything PeakCut keeps is in one folder: videos, clips, recordings, creators, settings and the speech model. By
-default it is the `data` folder inside PeakCut. **Settings, Storage** shows the folder and how much room its drive
-has, opens it in one click, and lets you move it to another drive: choose the new folder, and PeakCut moves
-everything there the next time it starts. If the drive is nearly full, PeakCut says so and stops taking new videos
-until there is room. (`PEAKCUT_DATA` in `.env` still works and takes priority.)
-
-## Updating
-
-PeakCut checks GitHub once a minute while it runs. When a newer version is out, the dashboard shows a notice
-within a minute or two (no restart needed), with what changed
-and how to update: ask your AI coding assistant to do it (the notice has a sentence to paste), or run
-`git pull && pip install -r requirements.txt` in the PeakCut folder and restart it (with Docker:
-`git pull && docker compose up -d --build`). Your `.env`, keys and clips are not touched. Only the two commit ids
-are sent to GitHub; set `PEAKCUT_UPDATE_CHECK=0` to turn the check off.
-
-## Deploy
-
-[DEPLOY.md](DEPLOY.md) walks through a single server with Docker: the app, PostgreSQL, and Caddy for HTTPS.
-
-```bash
-docker compose up -d --build
-```
-
-## How it behaves under load
-
-- The page asks the server one small question every few seconds. When nothing has changed, the answer comes
-  straight from memory.
-- Each person's videos wait in their own line and the lines take turns, so one person cannot hold everyone up.
-- The server measures its own processor, memory and disk every second. Extra videos and recordings start only
-  while there is room, wait briefly when it is nearly full, and continue the moment it frees up.
-- There are no limits on upload size, video length, recordings, creators or storage unless you set them in
-  `.env`. Five videos can be sent at once. Request sizes are always capped, so junk can't fill the memory.
+[AGENTS.md](AGENTS.md) is a short map of the code for contributors and AI coding assistants.
 
 ## Tests
 
-```bash
-python tests/run.py
+```powershell
+$env:PYTHONUTF8 = "1"; .venv\Scripts\python tests/run.py
 ```
 
-This starts a copy of the app on a spare port with an empty temporary data folder, runs the permission, abuse and
-queue tests against it, then removes it. It needs no keys and never touches real data.
+This starts a copy of the app on a spare port with an empty data folder, runs every test suite against it, then
+removes it. It needs no keys, no brain and never touches real data. `node brain/selftest.mjs` checks the MCP server
+on its own.
 
 ## Security
 
-- With sign-in off, PeakCut listens on this computer only (`127.0.0.1`), refuses changes sent by other websites,
-  and only answers to its own address. Do not expose it to the internet that way: turn accounts on.
-- Passwords are stored only as salted scrypt hashes. Sessions are random tokens stored hashed; cookies are HTTP-only.
-- Every route works out who is asking from the session, never from the request, so users only reach their own data.
-- Only known video sites are fetched, and text from videos is treated as data when it is shown to the AI.
-- Found a problem? Please report it privately through the repository's security advisories instead of opening a
-  public issue.
+- The app listens on this computer only (`127.0.0.1`) and refuses changes sent by other websites. Do not expose it
+  to the internet; for a shared server, turn accounts on (`PEAKCUT_ACCOUNTS=1`, see [DEPLOY.md](DEPLOY.md)).
+- The brain's doors answer only on this computer, only with the token in `data/brain.token`.
+- Text from videos and campaign briefs is treated as data, never as instructions, when it is shown to the AI.
 
 ## Using it responsibly
 
-Clip videos you made, or have permission to use. You are responsible for the rights to what you download, clip and
-post, and for following the terms of the sites you fetch from and post to.
+Clip only creators whose campaigns you have joined, or videos you have permission to use. You are responsible for
+the rights to what you download, clip and post, and for following the terms of every site you fetch from, post to
+and submit to.
 
 ## Licence
 
-[MIT](LICENSE). Caption fonts in `studio/fonts/` (Anton, Archivo Black, Poppins) are under the SIL Open Font
-License; the licence texts are in the same folder.
+[MIT](LICENSE), as PeakCut. Caption fonts in `studio/fonts/` (Anton, Archivo Black, Poppins) are under the SIL Open
+Font License; the licence texts are in the same folder.
