@@ -22,6 +22,19 @@ submission. For setup, see [README.md](README.md). For what to do when something
 
 All 19 test groups pass (`python tests/run.py`), including the new ones for the edit effects and per-platform cuts.
 
+### First real runs with the Claude Code brain (2026-11-17)
+
+| Run | Result |
+|---|---|
+| Brain start | **Fixed a bug**: the brain started but could never call its two tools (Claude Code held them back behind tool search, which the brain is not given). `run-brain.ps1` now turns tool search off; the brain took its first request 16 s after restarting |
+| A 20-minute TED talk pasted in the app | 4 clips, each with TikTok and Instagram cuts. The two picked by the brain are good (real hooks, Best line first and Long story, pauses cut 52 s → 45 s). The two picked while the brain was broken fell back to loudness and are poor (the TED intro) |
+| A YouTube live channel link pasted in the app (Sky News) | **Fixed a bug**: channel links (`twitch.tv/name`, `kick.com/name`, `youtube.com/@name/live`) were refused as "a channel, not a video". Now a live channel is recorded; an offline one says it isn't live. Recorded 12 minutes; the brain checked the words 5 times and found nothing worth an automatic clip on a news stream; "Last 60s" made a clip with the brain's hook |
+| A Twitch live channel link pasted in the app (AustinShow) | Recorded 7.5 minutes (stopped early from the window). The brain checked 5 times with nothing above the score bar; "Last 60s" made a 53 s clip with the brain's hook and context line, the Long story playbook with pauses cut, and 28 s TikTok and Instagram cuts |
+| Brain speed | About one request a minute; 13 requests in the first hour, none skipped |
+
+Still open from these runs: TikTok and Instagram share the same length range, so their cuts are the same file content;
+set different ranges (`PEAKCUT_CUT_TIKTOK`, `PEAKCUT_CUT_INSTAGRAM`) if each platform must get a different file.
+
 ## Before the first real run
 
 1. Run `start.cmd`. In the brain window, answer the trust question: down arrow, then Enter.

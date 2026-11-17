@@ -1551,7 +1551,10 @@ function takeLink(A, u, input) {
   A.links.push(l); A.note = null;
   if (input) input.value = "";            // the box is free for the next link straight away
   drawAtt();
-  lookUp(u).then(info => { l.state = "ok"; l.info = info; }, e => { l.state = "bad"; l.msg = e.message; }).then(() => {
+  const offAir = "That channel isn't live right now. To record them whenever they go live, add them as a creator.";
+  lookUp(u).then(info => {                  // a channel link is only usable while it is live: then it is recorded
+    if (isChannel(u) && !info.is_live) { l.state = "bad"; l.msg = offAir; } else { l.state = "ok"; l.info = info; }
+  }, e => { l.state = "bad"; l.msg = isChannel(u) ? offAir : e.message; }).then(() => {
     drawAtt();
     if (A.queued && !A.links.some(x => x.state === "wait")) {
       A.queued = false;
@@ -1564,7 +1567,6 @@ function onLink(input) {
   clearTimeout(linkTimer);
   const A = att(), u = input.value.trim();
   if (!u) { A.note = null; return drawAtt(); }
-  if (isChannel(u)) { A.note = "That's a channel, not a video. To clip their live streams, add them as a creator and press Start recording."; return drawAtt(); }
   if (!looksLink(u)) { A.note = u.length > 10 ? "Paste a full YouTube, Twitch or Kick video link." : null; return drawAtt(); }
   A.note = null; drawAtt();
   if (fullLink(u)) return takeLink(A, u, input);
@@ -1643,7 +1645,7 @@ async function makeClips() {
   const A = att();
   if (A.busy) return;
   const typed = $("#url")?.value.trim();
-  if (typed && looksLink(typed) && !isChannel(typed)) { clearTimeout(linkTimer); takeLink(A, typed, $("#url")); }
+  if (typed && looksLink(typed)) { clearTimeout(linkTimer); takeLink(A, typed, $("#url")); }
   if (A.links.some(l => l.state === "wait")) {   // still looking a link up: start as soon as it is found
     A.queued = true; drawAtt();
     toast("Finding the video first. Clipping starts as soon as it's found.");

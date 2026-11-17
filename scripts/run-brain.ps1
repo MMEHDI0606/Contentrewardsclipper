@@ -24,6 +24,9 @@ $env:ENABLE_CLAUDEAI_MCP_SERVERS = "false"
 $env:CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = "false"
 $env:CLAUDE_CODE_ENABLE_AWAY_SUMMARY = "0"
 $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1"
+# Its two PeakCut tools must be loaded from the start. With tool search on they are held back until the session
+# looks them up with the ToolSearch tool, which --tools below does not give it, so it could never call them.
+$env:ENABLE_TOOL_SEARCH = "false"
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue      # never bill an API key by accident
 
 $role = Get-Content -Raw (Join-Path $brain "CLAUDE.md")
