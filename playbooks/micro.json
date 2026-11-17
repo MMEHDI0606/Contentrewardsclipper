@@ -18,7 +18,8 @@
  },
  "edit": {
   "layout": "crop",
-  "max_len": 15
+  "max_len": 15,
+  "trim_pauses": true
  },
  "captions": {
   "style": "hype",

@@ -17,7 +17,8 @@
  },
  "edit": {
   "layout": "crop",
-  "teaser": 2.0
+  "teaser": 2.0,
+  "punch": true
  },
  "captions": {
   "style": "hype"

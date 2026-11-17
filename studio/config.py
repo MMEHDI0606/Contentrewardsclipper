@@ -186,6 +186,19 @@ CR_FEE = max(0.0, min(0.9, float(env("PEAKCUT_CR_FEE", "0.10"))))      # the pla
 WATCH_EVERY_MIN = max(1, int(env("PEAKCUT_WATCH_EVERY_MIN", "2")))    # how often watched channels are checked for going live
 CR_URL = env("PEAKCUT_CR_URL", "https://contentrewards.com").rstrip("/")
 
+
+def _cut_range(var: str, default: str):
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*", env(var, default))
+    return (float(m[1]), float(m[2])) if m and float(m[1]) < float(m[2]) else None
+
+
+# How long a clip should be on each platform, in seconds, as "shortest-longest". A clip outside a platform's range
+# gets its own version for that platform: it still ends on the same moment, but starts later (shorter) or earlier
+# (more setup). This also means each platform gets a different file. Leave one empty to always post the main clip.
+PLATFORM_CUTS = {p: r for p, r in (("tiktok", _cut_range("PEAKCUT_CUT_TIKTOK", "15-35")),
+                                   ("instagram", _cut_range("PEAKCUT_CUT_INSTAGRAM", "15-35")),
+                                   ("youtube", _cut_range("PEAKCUT_CUT_YOUTUBE", "30-60"))) if r}
+
 # ---------------------------------------------------------------- AI (bring your own key: see studio/ai.py)
 # These are the starting values. Whatever is saved from the dashboard (Settings, AI) is used instead.
 AI_PROVIDER = env("PEAKCUT_AI_PROVIDER", "gemini").strip().lower()            # gemini, openai, xai, groq, openrouter, anthropic, ollama, custom

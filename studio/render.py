@@ -166,14 +166,15 @@ def _hook_events(hook, dur, y):
     return ev
 
 
-def _tag_events(text, dur):
+def _tag_events(text, dur, y=None):
     """The paid-partnership tag: small, top left, on screen from the first frame to the last."""
     text = _clean(text)
     if not text:
         return []
     f, size = _Font.get(TAG["font"]), TAG["size"]
     w, h = f.width(text, size) + 36, f.em(size) * 1.25 + 14
-    x0, y0, x1, y1 = TAG["x"], TAG["y"], TAG["x"] + w, TAG["y"] + h
+    x0, y0 = TAG["x"], TAG["y"] if y is None else y
+    x1, y1 = x0 + w, y0 + h
     box = f"m {x0:.0f} {y0:.0f} l {x1:.0f} {y0:.0f} l {x1:.0f} {y1:.0f} l {x0:.0f} {y1:.0f}"
     span = f"{_ts(0)},{_ts(dur)}"
     return [f"Dialogue: 5,{span},Hook,,0,0,0,,{{\\an7\\pos(0,0)\\c&H{TAG['box']}&\\1a&H{TAG['alpha']}&\\p1}}{box}{{\\p0}}",
@@ -191,7 +192,19 @@ def _context_events(text, dur, y):
     return [f"Dialogue: 5,{_ts(0)},{_ts(dur)},Cap,,0,0,0,,{{\\an5\\pos({W // 2},{y:.0f})\\fs{size}\\bord4\\c&HFFFFFF&}}{text}"]
 
 
-def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, disclosure="", context="") -> str:
+def _banner_events(text, t0, t1, y):
+    """Big text across the middle while the picture is frozen and replayed."""
+    text = _clean(text).upper()
+    if not text or t1 - t0 < 0.05:
+        return []
+    f, size = _Font.get(HOOK["font"]), 120
+    size = max(48, min(size, int(size * 900 / max(1.0, f.width(text, size)))))
+    return [f"Dialogue: 7,{_ts(t0)},{_ts(t1)},Cap,,0,0,0,,{{\\an5\\pos({W // 2},{y - f.cap_shift(size):.0f})\\fs{size}"
+            f"\\bord8\\c&H00F0FF&\\fscx70\\fscy70\\t(0,140,\\fscx100\\fscy100)}}{text}"]
+
+
+def build_ass(words, start, end, hook, style_name, highlight, hook_y, cap_y, disclosure="", context="",
+              name_tag="", banners=()) -> str:
     st = STYLES.get(style_name, STYLES["bounce"])
     words = [dict(w, s=w["s"] - CAPTION_LEAD, e=w["e"] - CAPTION_LEAD) for w in words]
     strong = {_key(h) for h in highlight if _key(h)}
@@ -212,6 +225,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     dur = end - start
     ev = _hook_events(_clean(hook), dur, hook_y) + _tag_events(disclosure, dur) + _context_events(context, dur, max(190, hook_y - 120))
+    name = _clean(name_tag)
+    if name:                                   # the streamer's name, under the disclosure tag (or in its place)
+        tag_h = _Font.get(TAG["font"]).em(TAG["size"]) * 1.25 + 14
+        ev += _tag_events("@" + name.lstrip("@"), dur, TAG["y"] + (tag_h + 12 if _clean(disclosure) else 0))
+    for text, t0, t1 in banners:
+        ev += _banner_events(text, t0, t1, cap_y)
     f = _Font.get(st["font"])
     inside = [dict(w, w=_clean(w["w"])) for w in words if w["s"] >= start - 0.05 and w["s"] < end]
     inside = sorted((w for w in inside if w["w"]), key=lambda w: w["s"])
@@ -296,6 +315,91 @@ _qsv_ok = None
 RENDER_SECONDS = 600      # one clip's video encode; far beyond normal, so a frozen encoder is stopped, not waited on
 
 
+PAUSE = 0.7          # a silence longer than this between words is cut out (trim_pauses)
+PAUSE_KEEP = 0.12    # breathing room kept on each side of a cut
+PUNCH = {"zoom": 0.18, "len": 1.2}                                   # punch-in: how far and how long
+REPLAY = {"freeze": 0.7, "back": 2.0, "speed": 0.5, "text": "Watch again"}
+
+
+def _spoken(words, start, end):
+    return sorted((w for w in words if start - 0.05 <= w["s"] < end and _clean(w.get("w", ""))), key=lambda w: w["s"])
+
+
+def _keep_spans(words, start, end, trim):
+    """The parts of [start, end] that are kept: everything, or everything but the long silences between words.
+    Silence after the last word stays: the reaction at the end is often wordless."""
+    if not trim:
+        return [(start, end)]
+    said = _spoken(words, start, end)
+    spans, a = [], start
+    if said and said[0]["s"] - start > PAUSE:
+        a = said[0]["s"] - PAUSE_KEEP
+    for w, nxt in zip(said, said[1:]):
+        if nxt["s"] - w["e"] > PAUSE:
+            spans.append((a, w["e"] + PAUSE_KEEP))
+            a = nxt["s"] - PAUSE_KEEP
+    spans.append((a, end))
+    return [(x, y) for x, y in spans if y - x >= 0.1]
+
+
+def _beat(clip, words, start, end):
+    """The moment the clip is about: the last highlighted word said, else a second before the end."""
+    strong = {_key(h) for h in clip.get("highlight_words") or [] if _key(h)}
+    hits = [w for w in _spoken(words, start, end) if _key(w["w"]) in strong]
+    t = hits[-1]["e"] if hits else end - 1.0
+    return max(start, min(end - 0.2, t))
+
+
+def timeline(clip, words, start, end):
+    """The pieces the clip is played from, in order. Each is (from, to, speed, what) in source seconds, what being
+    "teaser", "main" or "replay"; or ("freeze", at, seconds, text) for a still frame."""
+    teaser = min(float(clip.get("teaser") or 0), (end - start) / 3)
+    out = [(end - teaser, end, 1.0, "teaser")] if teaser >= 1.0 else []
+    spans = _keep_spans(words, start, end, clip.get("trim_pauses"))
+    at = _beat(clip, words, start, end) if clip.get("replay") else None
+    if at is not None and at - start < 0.8:
+        at = None                                            # too close to the start to replay anything
+    for a, b in spans:
+        if at is not None and a < at <= b:
+            out.append((a, at, 1.0, "main"))
+            out.append(("freeze", at, REPLAY["freeze"], clip.get("replay_text") or REPLAY["text"]))
+            out.append((max(start, at - REPLAY["back"]), at, REPLAY["speed"], "replay"))
+            if b - at >= 0.05:
+                out.append((at, b, 1.0, "main"))
+            at = None
+        else:
+            out.append((a, b, 1.0, "main"))
+    return out
+
+
+def _place(pieces, words):
+    """Words moved to where they are heard in the finished clip; the total length; where the banners go; and
+    a function from a source time to the finished clip's time."""
+    shown, banners, t, where, first = [], [], 0.0, [], True
+    for p in pieces:
+        if p[0] == "freeze":
+            banners.append([p[3], t, t + p[2]])
+            t += p[2]
+            continue
+        a, b, speed, what = p
+        if what == "replay":
+            banners[-1][2] = t + (b - a) / speed               # the text stays up while the replay runs
+        else:
+            lo = a - 0.05 if what == "main" and first else a     # a word starting just before the clip still counts
+            shown += [dict(w, s=t + (w["s"] - a), e=t + (min(w["e"], b) - a)) for w in words if lo <= w["s"] < b]
+            if what == "main":
+                where.append((a, b, t))
+                first = False
+        t += (b - a) / speed
+
+    def at(src_t):
+        for a, b, t0 in where:
+            if a <= src_t < b:
+                return t0 + src_t - a
+        return None
+    return shown, t, [tuple(x) for x in banners], at
+
+
 def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, src_w: int, src_h: int) -> dict:
     """Writes <name>.mp4, <name>.jpg and <name>.ass into out_dir. Returns file names."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -303,48 +407,73 @@ def render_clip(src: Path, out_dir: Path, name: str, clip: dict, words: list, sr
     facecam = clip.get("facecam") or None
     layout, fg_h, hook_y, cap_y = geometry(src_w, src_h, clip.get("layout", "blur"), facecam)
     context = clip.get("context", "") if clip.get("context_line") else ""
-    # result first: the last few seconds play before the clip, then the clip from its setup
-    teaser = min(float(clip.get("teaser") or 0), (end - start) / 3)
-    if teaser >= 1.0:
-        t0 = end - teaser
-        shown = ([dict(w, s=w["s"] - t0, e=w["e"] - t0) for w in words if t0 <= w["s"] < end]
-                 + [dict(w, s=w["s"] - start + teaser, e=w["e"] - start + teaser) for w in words if start - 0.05 <= w["s"] < end])
-        ass = build_ass(shown, 0.0, end - start + teaser, clip.get("hook", ""), clip.get("style", "bounce"),
-                        clip.get("highlight_words", []), hook_y, cap_y, clip.get("disclosure", ""), context)
-    else:
-        teaser = 0.0
-        ass = build_ass(words, start, end, clip.get("hook", ""), clip.get("style", "bounce"),
-                        clip.get("highlight_words", []), hook_y, cap_y, clip.get("disclosure", ""), context)
+    pieces = timeline(clip, words, start, end)
+    shown, total, banners, to_out = _place(pieces, words)
+    ass = build_ass(shown, 0.0, total, clip.get("hook", ""), clip.get("style", "bounce"), clip.get("highlight_words", []),
+                    hook_y, cap_y, clip.get("disclosure", ""), context, clip.get("name_tag", ""), banners)
+    punch = []
+    if clip.get("punch"):
+        t = to_out(_beat(clip, words, start, end))
+        if t is not None:
+            punch = [(max(0.0, t - 0.15), min(total, t - 0.15 + PUNCH["len"]))]
     # The clip is made in a short work folder and moved into place afterwards. The caption step of ffmpeg cannot
     # open files whose full path is longer than 260 characters on Windows, which a data folder deep inside other
     # folders easily reaches. Inside the work folder every name is short and relative (a drive colon would also
     # break the filter syntax).
     work = Path(tempfile.mkdtemp(prefix="pk"))
     try:
-        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, facecam, src_w, src_h, teaser)
+        return _render_in(work, src, out_dir, name, start, end, layout, fg_h, ass, facecam, src_w, src_h, pieces, total, punch)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _pieces_filter(pieces, start):
+    """Cuts the one input into its pieces and joins them again, in order: [cv] and [ca] come out."""
+    n, fps = len(pieces), config.OUT_FPS
+    fmt = "aformat=sample_rates=48000:channel_layouts=stereo"
+    fc = f"[0:v]fps={fps},split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"
+    fc += f"[0:a:0]{fmt},asplit={n}" + "".join(f"[a{i}]" for i in range(n)) + ";"
+    for i, p in enumerate(pieces):
+        if p[0] == "freeze":
+            at, d = p[1] - start, p[2]
+            fc += (f"[v{i}]trim=start={at:.3f}:duration={1.5 / fps:.4f},setpts=PTS-STARTPTS,"
+                   f"tpad=stop_mode=clone:stop_duration={d:.3f},trim=duration={d:.3f}[pv{i}];"
+                   f"[a{i}]anullsink;anullsrc=r=48000:cl=stereo,atrim=duration={d:.3f}[pa{i}];")
+            continue
+        a, b, speed = p[0] - start, p[1] - start, p[2]
+        slow = "" if speed == 1.0 else f",atempo={speed}"
+        fc += (f"[v{i}]trim=start={a:.3f}:end={b:.3f},setpts=(PTS-STARTPTS)/{speed}[pv{i}];"
+               f"[a{i}]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS{slow}[pa{i}];")
+    return fc + "".join(f"[pv{i}][pa{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[cv][ca];"
+
+
+def _punch_filter(punch, inp="[v0]", out="[vz]"):
+    """Zooms in on the middle of the frame for a moment, easing in and out, keeping the frame size."""
+    z = PUNCH["zoom"]
+    f = "+".join(f"{z}*min(1,max(0,(it-{a:.3f})/0.12))*min(1,max(0,({b:.3f}-it)/0.2))" for a, b in punch)
+    return (f"{inp}zoompan=z='1+{f}':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=1:s={W}x{H}:fps={config.OUT_FPS},"
+            f"setsar=1{out};")
+
+
 def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layout, fg_h, ass: str,
-               facecam=None, src_w=0, src_h=0, teaser=0.0) -> dict:
+               facecam=None, src_w=0, src_h=0, pieces=None, total=None, punch=()) -> dict:
     global _qsv_ok
     (work / f"{name}.ass").write_text(ass, encoding="utf-8")
     (work / "f").mkdir()
     for f in config.FONTS_DIR.glob("*.ttf"):
         shutil.copyfile(f, work / "f" / f.name)
     norm = "loudnorm=I=-14:TP=-1.5:LRA=11"
-    if teaser:
-        joined = (f"[1:v]fps={config.OUT_FPS},setpts=PTS-STARTPTS[tv];[1:a:0]asetpts=PTS-STARTPTS[ta];"
-                  f"[0:v]fps={config.OUT_FPS},setpts=PTS-STARTPTS[mv];[0:a:0]asetpts=PTS-STARTPTS[ma];"
-                  f"[tv][ta][mv][ma]concat=n=2:v=1:a=1[cv][ca];[ca]{norm}[a];")
-        fc = joined + _filter(layout, fg_h, facecam, src_w, src_h, "[cv]") + f"[v0]ass={name}.ass:fontsdir=f[v]"
+    total = end - start if total is None else total
+    look = "[vz]" if punch else "[v0]"
+    zoom = _punch_filter(punch) if punch else ""
+    if pieces and (len(pieces) > 1 or pieces[0][-1] != "main" or pieces[0][:2] != (start, end)):
+        fc = (_pieces_filter(pieces, start) + f"[ca]{norm}[a];" + _filter(layout, fg_h, facecam, src_w, src_h, "[cv]")
+              + zoom + f"{look}ass={name}.ass:fontsdir=f[v]")
         base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
-                "-ss", f"{end - teaser:.2f}", "-t", f"{teaser:.2f}", "-i", str(src),
                 "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
                 "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
     else:
-        fc = _filter(layout, fg_h, facecam, src_w, src_h) + f"[v0]ass={name}.ass:fontsdir=f[v]"
+        fc = _filter(layout, fg_h, facecam, src_w, src_h) + zoom + f"{look}ass={name}.ass:fontsdir=f[v]"
         base = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.2f}", "-t", f"{end - start:.2f}", "-i", str(src),
                 "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0", "-af", norm,
                 "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-movflags", "+faststart", "-pix_fmt"]
@@ -365,7 +494,7 @@ def _render_in(work: Path, src: Path, out_dir: Path, name: str, start, end, layo
             _qsv_ok = False
     else:
         raise RuntimeError(f"Render failed: {err}")
-    cover_t = min(1.2, (end - start + teaser) / 2)
+    cover_t = min(1.2, total / 2)
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{cover_t:.2f}", "-i", f"{name}.mp4", "-frames:v", "1",
          "-q:v", "3", f"{name}.jpg"], cwd=work)
     for ext in ("mp4", "jpg", "ass"):

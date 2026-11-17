@@ -2149,6 +2149,7 @@ async function saveSettings() { const d = {}; $$("#sform [data-s]").forEach(i =>
 
 /* ============================================================ clip editor */
 let PB = null;
+const CUTS = {tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube"};
 function openClip(jid, cid) {
   if (!PB) api("/api/playbooks").then(r => { PB = r; if (D.jid) drawClipDlg(true); }).catch(() => {});
   if (!CAMP.at) loadCampaigns(true).then(() => { if (D.jid) drawClipDlg(true); }); D.jid = jid; D.cid = cid; D.sig = ""; drawClipDlg(true); $("#clipdlg").showModal(); }
@@ -2170,6 +2171,8 @@ function drawClipDlg(full) {
           <label class="f">Layout<select data-f="layout">${opts(S.status.layouts, c.layout)}</select></label></div>
         <div class="two"><label class="f">Playbook<select data-f="playbook">${opts(Object.fromEntries((PB || []).filter(p => (p.kind || "structure") === "structure").map(p => [p.id, p.name])), c.playbook || "plain")}</select></label>
           <label class="f">Context line<input data-f="context" value="${esc(c.context || "")}" maxlength="90"></label></div>
+        <div class="row">${[["trim_pauses", "Cut pauses"], ["punch", "Zoom in on the peak"], ["replay", "Freeze and slow-motion replay"]].map(([k, l]) =>
+          `<label class="ck"><input type="checkbox" data-f="${k}" ${c[k] ? "checked" : ""}>${l}</label>`).join("")}</div>
         ${c.playbook_reason ? `<p class="help">${esc(c.playbook_reason)}</p>` : ""}
         <div class="two"><label class="f">Start (seconds)<input data-f="start" type="number" step="0.5" value="${c.start}"></label>
           <label class="f">End (seconds)<input data-f="end" type="number" step="0.5" value="${c.end}"></label></div>
@@ -2185,6 +2188,7 @@ function drawClipDlg(full) {
           : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
           ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
+          ${c.status === "done" ? Object.entries(c.cuts || {}).map(([k, x]) => `<a class="btn sm" href="${m}${esc(x.file)}?download=1" title="A separate cut for ${esc(CUTS[k] || k)}">${ic("down")}${esc(CUTS[k] || k)} cut ${Math.round(x.end - x.start)} s</a>`).join("") : ""}
           <button class="btn" data-act="copy" data-j="${j.id}" data-c="${esc(c.id)}">${ic("copy")}Copy post text</button></div>
       </div></div>`;
   } else if (D.sig !== sig) $("#stage").innerHTML = stage;
@@ -2699,7 +2703,7 @@ document.addEventListener("click", async e => {
       await api(`/api/accounts/${d.id}`, {method:"DELETE"}); await tick(); return drawSettings();
     }
     if (a === "remake") {
-      const body = {}; $$("#clipdlg [data-f]").forEach(i => body[i.dataset.f] = i.type === "number" ? Number(i.value) : i.value);
+      const body = {}; $$("#clipdlg [data-f]").forEach(i => body[i.dataset.f] = i.type === "number" ? Number(i.value) : i.type === "checkbox" ? i.checked : i.value);
       await send(`/api/jobs/${D.jid}/clips/${D.cid}/render`, body); toast("Re-making the clip…", "ok"); return tick();
     }
     if (a === "postnow" || a === "postqueue") {

@@ -92,5 +92,6 @@ def choose(clip, history, creator=None, has_chat=False, rng=random):
         lay = "full_cam" if clip.get("category") in ((library().get("full_cam") or {}).get("when") or {}).get("categories", []) else "reaction_stack"
         layout = ((library().get(lay) or {}).get("edit") or {}).get("layout", layout)
     clip.update(playbook=wanted, variant=variant, playbook_reason=reason[:200], style=style, layout=layout,
-                teaser=float(edit.get("teaser") or 0), context_line=bool(edit.get("context_line")))
+                teaser=float(edit.get("teaser") or 0), context_line=bool(edit.get("context_line")),
+                trim_pauses=bool(edit.get("trim_pauses")), punch=bool(edit.get("punch")), replay=bool(edit.get("replay")))
     return clip

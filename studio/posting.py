@@ -150,6 +150,9 @@ def _post(p):
         if not acc:
             raise RuntimeError("That account was disconnected.")
         path = Path(job["dir"]) / "clips" / clip["file"]
+        cut = (clip.get("cuts") or {}).get(acc["platform"])     # the version made for this platform's length
+        if cut and (path.parent / cut["file"]).is_file():
+            path = path.parent / cut["file"]
         creator = creators.get(job["creator"]) or dict(creators.DEFAULTS, name="clips")
         title, cap = clip.get("title") or clip.get("hook") or "Clip", _caption(clip, creator)
         if acc["platform"] == "youtube":

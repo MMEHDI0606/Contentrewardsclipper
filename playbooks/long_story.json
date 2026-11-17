@@ -18,7 +18,8 @@
   "layout": "crop",
   "context_line": true,
   "min_len": 40,
-  "max_len": 60
+  "max_len": 60,
+  "trim_pauses": true
  },
  "captions": {
   "style": "clean"

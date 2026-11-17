@@ -14,7 +14,8 @@
  },
  "edit": {
   "layout": "crop",
-  "teaser": 3.0
+  "teaser": 3.0,
+  "replay": true
  },
  "captions": {
   "style": "bounce"

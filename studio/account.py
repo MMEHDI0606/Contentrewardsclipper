@@ -32,7 +32,8 @@ def delete_clip(jid: str, cid: str) -> bool:
     job["clips"] = [c for c in job["clips"] if c["id"] != cid]
     jobs.save(job)
     d = Path(job["dir"])
-    for name in (clip.get("file"), clip.get("cover")):
+    cuts = (clip.get("cuts") or {}).values()
+    for name in [clip.get("file"), clip.get("cover")] + [c.get(k) for c in cuts for k in ("file", "cover")]:
         if name:
             (d / "clips" / Path(str(name)).name).unlink(missing_ok=True)
     src = clip.get("src")

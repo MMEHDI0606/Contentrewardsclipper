@@ -102,7 +102,9 @@ checked separately (`node brain/selftest.mjs`).
   2 minutes server-side (not only with the page open), and a status check is cheap.
 - **Campaign pages are read with fixed text rules**, not the AI: the page structure is regular, and no AI is needed.
 - **Camera box** is typed as four percentages on the creator, not drawn in the UI.
-- **Not built**: silence trimming, punch-in zoom, freeze frame and slow motion, separate cuts per platform, and the
-  importer for your edit-recipe tool (send its recipe schema first; the spec says not to guess it).
+- **Not built**: the importer for your edit-recipe tool (send its recipe schema first; the spec says not to guess it).
+- **Edit effects** (cut pauses, punch-in zoom, freeze frame with slow-motion replay) are switched on by playbooks:
+  Long story and Micro cut pauses, Chat erupts punches in, Fail replay freezes and replays. The punch and replay land
+  on the last highlighted word, or a second before the end. Pauses after the last word are kept (the reaction).
 - **UI renamed** to Clipping Studio with its own palette and logo. Environment variables keep the `PEAKCUT_` prefix,
   and the original MIT licence stays.

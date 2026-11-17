@@ -133,7 +133,10 @@ def prepare_clip(job, clip, has_chat=False):
         clip.setdefault("cr", {"state": "rendered"})
     elif job.get("campaign_needed"):
         clip["campaign_needed"] = True
-    playbooks.choose(clip, history(cid), creators.get(cid) if cid else None, has_chat)
+    who = creators.get(cid) if cid else None
+    if who and who.get("name"):
+        clip["name_tag"] = who["name"]
+    playbooks.choose(clip, history(cid), who, has_chat)
     return clip
 
 
@@ -387,11 +390,13 @@ def request_render(jid, cid, changes: dict):
     if "playbook" in changes and changes["playbook"] in playbooks.structures():
         p = playbooks.structures()[changes["playbook"]]
         new.update(playbook=changes["playbook"], playbook_reason="Chosen by you.",
-                   teaser=float((p.get("edit") or {}).get("teaser") or 0), context_line=bool((p.get("edit") or {}).get("context_line")))
+                   teaser=float((p.get("edit") or {}).get("teaser") or 0), context_line=bool((p.get("edit") or {}).get("context_line")),
+                   **{k: bool((p.get("edit") or {}).get(k)) for k in ("trim_pauses", "punch", "replay")})
     if "teaser" in changes:
         new["teaser"] = max(0.0, min(5.0, float(changes["teaser"] or 0)))
-    if "context_line" in changes:
-        new["context_line"] = bool(changes["context_line"])
+    for k in ("context_line", "trim_pauses", "punch", "replay"):
+        if k in changes:
+            new[k] = bool(changes[k])
     if new.get("style") not in render.STYLES:
         new["style"] = DEFAULTS["style"]
     if new.get("layout") not in render.LAYOUTS:
@@ -399,6 +404,42 @@ def request_render(jid, cid, changes: dict):
     clip.update(new, status="queued")
     save(job)
     _q.put(("clip", jid, cid))
+
+
+def platform_cut(clip, words, lo, hi):
+    """Start and end for a version of the clip that is lo to hi seconds long, or None when the clip already is.
+    Clips end on their best moment, so the end stays and the start moves: later to shorten, earlier for more setup.
+    A new start is the first word of a sentence where possible, then of a phrase, then of any word; never inside a
+    word. Only when there is nothing earlier to add (the start of the video) does the clip run on to a later
+    sentence end instead."""
+    s, e = clip["start"], clip["end"]
+    if lo - 0.05 <= e - s <= hi + 0.05:
+        return None
+    floor, ceil = clip.get("src_offset", 0.0), clip.get("src_end")
+    near = sorted((w for w in words if e - hi - 30 <= w["s"] <= e + hi), key=lambda w: w["s"])
+    before = [w for w in near if w["s"] < e]
+    ends = set(brain.sentence_ends(near))
+    sentence = [w["s"] for i, w in enumerate(before) if i and before[i - 1]["e"] in ends]
+    phrase = [ln["s"] for ln in brain.make_lines(before)]
+    window = lambda xs: [x for x in xs if max(floor, e - hi + 0.15) <= x <= e - lo]
+    starts = window(sentence) or window(phrase) or window([w["s"] for w in before])
+    if starts:
+        x = min(starts, key=lambda x: abs(x - s))
+    elif e - s > hi:                 # no word starts in reach: begin as late as allowed, after the word said there
+        x = max(floor, e - hi)
+        x = next((w["e"] for w in before if w["s"] < x < w["e"]), x)
+    else:                            # nothing said before: as early as allowed, at the start of a word said there
+        x = max(floor, e - lo)
+        x = next((w["s"] for w in before if w["s"] < x < w["e"]), x)
+    if any(w["s"] == x for w in before):          # a breath before the first word, never into the word before it
+        prev = [w["e"] for w in before if w["e"] <= x]
+        x = max(floor, x - min(0.15, x - prev[-1] if prev else 0.15))
+    if e - x < lo - 0.05:            # still too short: run on to a sentence end further along
+        stops = [t for t in sorted(ends) if x + lo <= t <= x + hi and (ceil is None or t <= ceil)]
+        if stops:
+            e = stops[0]
+    x, e = round(x, 2), round(e, 2)
+    return None if (x, e) == (round(s, 2), round(clip["end"], 2)) else (x, e)
 
 
 def render_one(job, clip, words):
@@ -431,6 +472,30 @@ def render_one(job, clip, words):
         near = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(raw)]
         out = render.render_clip(src, d / "clips", clip["id"], local, near, job["width"], job["height"])
         clip.update(out, status="done", version=clip.get("version", 0) + 1, error=None)
+        # A version for each platform whose length range the clip falls outside (config.PLATFORM_CUTS). One that
+        # fails is skipped and noted: that platform then gets the main clip.
+        teaser = float(clip.get("teaser") or 0)
+        teaser = teaser if teaser >= 1 else 0.0                # the replayed ending at the start adds to the length
+        old, cuts = clip.get("cuts") or {}, {}
+        for platform, (lo, hi) in config.PLATFORM_CUTS.items():
+            cut = platform_cut(clip, words, lo - teaser, hi - teaser)
+            if not cut:
+                continue
+            try:
+                extra = [dict(w, s=w["s"] - off, e=w["e"] - off) for w in roman.words(
+                    [w for w in words if cut[0] - 1 <= w["s"] <= cut[1] + 1 and not clip["start"] - 1 <= w["s"] <= clip["end"] + 1])]
+                got = render.render_clip(src, d / "clips", f"{clip['id']}_{platform}", dict(local, start=cut[0] - off, end=cut[1] - off),
+                                         sorted(near + extra, key=lambda w: w["s"]), job["width"], job["height"])
+                cuts[platform] = {"file": got["file"], "cover": got["cover"], "start": cut[0], "end": cut[1]}
+            except Exception as e:  # noqa: BLE001
+                creators.log(job["creator"], f"The {platform} version of a clip could not be made, so the main clip "
+                                             f"will be posted there: {safe.friendly(e, 200)}")
+        for platform, c in old.items():
+            if platform not in cuts:
+                for name in (c.get("file"), c.get("cover")):
+                    if name:
+                        (d / "clips" / Path(str(name)).name).unlink(missing_ok=True)
+        clip["cuts"] = cuts
         post = {k: clip[k] for k in ("title", "description", "hashtags", "hook", "start", "end", "score")}
         (d / "clips" / f"{clip['id']}.json").write_text(json.dumps(post, indent=1), encoding="utf-8")
         if clip["version"] == 1:
