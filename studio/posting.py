@@ -60,12 +60,15 @@ def enqueue(job, clip, account_ids, now=False) -> list:
     if why:
         raise ValueError(why)
     if clip.get("campaign"):
-        # a campaign clip goes to one account only: the same file on two accounts looks like reposted content
+        # a campaign clip goes to one account per platform: the same file on two accounts of one platform looks like
+        # reposted content
         used = {p["account"] for p in _mine() if p["job"] == job["id"] and p["clip"] == clip["id"] and p["status"] in OPEN + ("posted",)}
-        if used or len(account_ids) > 1:
-            if used and set(account_ids) <= used:
-                return []
-            raise ValueError("A campaign clip is posted to one account only. Pick a single account.")
+        if used and set(account_ids) <= used:
+            return []
+        plat = lambda aid: (accounts.get(aid) or {}).get("platform")  # noqa: E731
+        want = [plat(a) for a in account_ids if a not in used]
+        if len(want) != len(set(want)) or set(want) & {plat(a) for a in used}:
+            raise ValueError("A campaign clip is posted to one account per platform. Pick a single account for each.")
         clip["approved"] = True
     made = []
     with _lock:
@@ -119,10 +122,13 @@ def campaign_clip_ready(job, clip):
     if camp["autonomy"] in ("post", "submit") and clip.get("score", 0) >= camp["post_min_score"] and not accounts.settings()["paused"]:
         c = creators.get(job.get("creator") or job.get("source_creator")) or {}
         ok_platforms = camp["platforms"] or list(accounts.PLATFORM_NAMES)
-        accts = [a for a in c.get("accounts", []) if (accounts.get(a) or {}).get("platform") in ok_platforms]
+        accts = {}
+        for a in c.get("accounts", []):          # the first account of each platform the campaign takes
+            if (accounts.get(a) or {}).get("platform") in ok_platforms:
+                accts.setdefault(accounts.get(a)["platform"], a)
         if accts:
             try:
-                made = enqueue(job, clip, accts[:1])
+                made = enqueue(job, clip, list(accts.values()))
                 if made:
                     creators.log(job.get("creator"), f"Queued for {made[0]['account_name']} ({camp['name']}): {name}")
             except ValueError as e:
@@ -235,6 +241,31 @@ def _stats_for(recent):
                 p["views"] = v
 
 
+KEEP_POSTED = 86400     # a clip's video files are deleted this long after its last post went up
+
+
+def _tidy():
+    """Free the drive: a day after a clip's last post went up, with nothing of it still waiting or failed, delete its
+    video files. The post stays up, and the clip's record, cover picture, links and views stay for Results."""
+    by_clip = {}
+    for p in _mine():
+        by_clip.setdefault((p["job"], p["clip"]), []).append(p)
+    for (jid, cid), ps in by_clip.items():
+        up = [p.get("posted_at") or 0 for p in ps if p["status"] == "posted"]
+        if not up or any(p["status"] in OPEN + ("failed",) for p in ps) or time.time() - max(up) < KEEP_POSTED:
+            continue
+        job = jobs.get(jid)
+        clip = next((c for c in job["clips"] if c["id"] == cid), None) if job else None
+        if not clip or clip.get("files_deleted"):
+            continue
+        for name in [clip.get("file")] + [c.get("file") for c in (clip.get("cuts") or {}).values()]:
+            if name:
+                (Path(job["dir"]) / "clips" / Path(str(name)).name).unlink(missing_ok=True)
+        clip["files_deleted"] = time.time()
+        jobs.save(job)
+        ctx.bump()
+
+
 def _stats():
     while True:
         for uid in {p.get("user") for p in _posts if p.get("user")}:
@@ -243,6 +274,7 @@ def _stats():
                     recent = [p for p in _mine() if p["status"] == "posted" and time.time() - p["posted_at"] < 14 * 86400]
                     _stats_for(recent)
                     _snapshot(recent)
+                    _tidy()
             except Exception:  # noqa: BLE001
                 pass
         _save()

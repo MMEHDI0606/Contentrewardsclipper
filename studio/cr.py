@@ -168,6 +168,9 @@ def parse_campaign(text: str, title: str = "") -> dict:
     if m:
         spent, total = _money(m.group(1)), _money(m.group(2))
         out.update(budget_total=total, budget_left=max(0.0, total - spent))
+    m = re.search(r"\bPool\s*\$([\d,.]+)", " ".join(lines))     # a pool campaign: a share of the pool, no rate
+    if m and "budget_total" not in out:
+        out["budget_total"] = _money(m.group(1))
     low = text.lower()
     if "accepting clips" in low:
         out["status"] = "active"
@@ -245,8 +248,30 @@ def suggestions(got: dict) -> list:
 
 
 def list_campaigns(where="discover") -> list:
-    """Campaign links and names: from Discover (public), or from the logged-in home page (joined campaigns)."""
-    path = "/c/discover" if where == "discover" else "/c"
+    """Campaign links and names: from Discover (public), or from the logged-in Campaigns page (joined campaigns)."""
+    path = "/c/discover" if where == "discover" else "/c/campaigns"
+
+    def joined(page):
+        # the joined campaigns are cards without links, so each one is opened to learn its address
+        out, i = [], 0
+        while True:
+            _go(page, config.CR_URL + path)
+            _guard(page, where)
+            cards = page.get_by_text("Joined", exact=True)
+            if i >= cards.count():
+                break
+            label = cards.nth(i).evaluate("e => { while (e.parentElement && !/Submit clip/.test(e.innerText)) e = e.parentElement; return e.innerText; }")
+            cards.nth(i).click()
+            page.wait_for_url(re.compile(r"/c/campaigns/[0-9a-f-]{36}"), timeout=15000)
+            bits = [b.strip() for b in label.splitlines() if b.strip() not in ("", "Joined", "·", "Submit clip")]
+            out.append({"url": page.url.split("?")[0], "label": " · ".join(bits[:4])[:160]})
+            i += 1
+        if not out:
+            raise Stop(f"No joined campaigns were found on your Campaigns page. Screenshot: {_shot(page, where + ' empty')}")
+        return out
+
+    if where != "discover":
+        return _run(joined)
 
     def look(page):
         _go(page, config.CR_URL + path)

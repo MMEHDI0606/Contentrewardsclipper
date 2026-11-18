@@ -175,6 +175,25 @@ with ctx.as_user(uid):
     posting._post(p)
     check("a version whose file is missing: the main clip is posted", sent.get("youtube") == "clip01.mp4", sent)
 
+    # ------------------------------------------------------------ video files deleted a day after posting
+    (clips_dir / "clip01_youtube.mp4").write_text("x")
+    (clips_dir / "clip01_youtube.jpg").write_text("x")
+    mine = [q for q in posting._posts if q["clip"] == "clip01"]
+    posting._tidy()
+    check("posted just now: the files stay", (clips_dir / "clip01.mp4").exists() and not jobs.get(job["id"])["clips"][0].get("files_deleted"))
+    for q in mine:
+        q["posted_at"] = 0
+    waiting = dict(mine[0], id="later", status="scheduled")
+    posting._posts.append(waiting)
+    posting._tidy()
+    check("a post of it still waiting: the files stay", (clips_dir / "clip01.mp4").exists())
+    waiting["status"] = "cancelled"
+    posting._tidy()
+    c = jobs.get(job["id"])["clips"][0]
+    check("a day after its last post: the clip's videos are deleted", not any(clips_dir.glob("clip01*.mp4")),
+          [f.name for f in clips_dir.iterdir()])
+    check("its cover pictures and record stay", (clips_dir / "clip01_youtube.jpg").exists() and c.get("files_deleted") and c["status"] == "done")
+
     # ------------------------------------------------------------ deleting
     (clips_dir / "clip01_youtube.mp4").write_text("x")
     account.delete_clip(job["id"], "clip01")

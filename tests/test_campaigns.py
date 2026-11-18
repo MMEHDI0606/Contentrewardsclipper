@@ -169,6 +169,8 @@ with ctx.as_user(uid):
           == ("CLIP TRAXNYC YOUTUBE!", ["tiktok", "youtube"], 1.5, 300.0, 777.0, "active"), got)
     check("and its requirements once joined", "No reuploads" in got["brief"], got.get("brief"))
     check("an empty budget marks it out of budget", cr.parse_campaign(sample.replace("$4,223", "$5,000"), "X | Content Rewards")["status"] == "out_of_budget")
+    pool = cr.parse_campaign("$5K pool\nCounting views\nPool\nPool\n$5,000.00\nSplit by\nViews\nPaid\nWhen the pool ends", "P | Content Rewards")
+    check("a pool campaign is read: its pool is the budget, with no rate", (pool.get("budget_total"), "rate_per_1k" in pool) == (5000.0, False), pool)
 
     # ---- the watchlist: by hand, or through an active campaign set to record automatically, in the owner's order
     campaigns.update(b["id"], {"auto_record": True, "creators": [kai["id"], other["id"]]})

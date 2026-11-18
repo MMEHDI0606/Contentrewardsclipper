@@ -1709,7 +1709,7 @@ function clipHtml(j, c) {
       ${postPills(c) || campPills(c) ? `<div class="row" style="gap:4px">${campPills(c)}${postPills(c)}</div>` : ""}
       <div class="clip-foot">
         ${busyClip ? "" : `<label class="selck" title="Select this clip"><input type="checkbox" data-sel="${key}" ${sel().has(key) ? "checked" : ""} aria-label="Select this clip"></label>`}
-        ${c.status === "done" ? `<a class="btn sm icon ghost" href="${m}${esc(c.file)}?download=1" title="Download" aria-label="Download">${ic("down")}</a>` : ""}
+        ${c.status === "done" && !c.files_deleted ? `<a class="btn sm icon ghost" href="${m}${esc(c.file)}?download=1" title="Download" aria-label="Download">${ic("down")}</a>` : ""}
         <button class="btn sm icon ghost" data-act="copy" ${a} title="Copy post text" aria-label="Copy post text">${ic("copy")}</button>
         ${busyClip ? "" : `<button class="btn sm icon ghost" data-act="delclip" ${a} title="Delete this clip" aria-label="Delete this clip">${ic("trash")}</button>`}
         <span class="grow"></span>
@@ -2159,7 +2159,8 @@ function drawClipDlg(full) {
   const j = jobOf(D.jid), c = j?.clips.find(x => x.id === D.cid), dlg = $("#clipdlg");
   if (!c) { if (dlg.open) dlg.close(); return; }
   const m = `/media/${j.id}/`, sig = c.status + c.version;
-  const stage = c.status === "done" ? `<video src="${m}${esc(c.file)}?v=${c.version}" poster="${m}${esc(c.cover)}?v=${c.version}" controls autoplay playsinline></video>`
+  const stage = c.files_deleted ? `<div style="padding:20px;text-align:center"><img src="${m}${esc(c.cover)}?v=${c.version}" alt="" style="max-width:100%;max-height:60vh"><p class="sub">The video file was deleted a day after posting. The post stays up.</p></div>`
+    : c.status === "done" ? `<video src="${m}${esc(c.file)}?v=${c.version}" poster="${m}${esc(c.cover)}?v=${c.version}" controls autoplay playsinline></video>`
     : c.status === "error" ? `<div class="err" style="padding:20px;text-align:center">${esc(c.error || "Could not make this clip.")}</div>`
     : `<span class="making">${c.status === "rendering" ? "Making this clip…" : "Waiting its turn…"}</span>`;
   if (full) {
@@ -2189,8 +2190,8 @@ function drawClipDlg(full) {
           <div class="row"><button class="btn primary" data-act="postnow">${ic("send")}Post now</button><button class="btn" data-act="postqueue">Add to queue</button></div>`
           : `<p class="help">No accounts connected yet. Connect one in Settings.</p>`}
         <div class="row" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--line)">
-          ${c.status === "done" ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
-          ${c.status === "done" ? Object.entries(c.cuts || {}).map(([k, x]) => `<a class="btn sm" href="${m}${esc(x.file)}?download=1" title="A separate cut for ${esc(CUTS[k] || k)}">${ic("down")}${esc(CUTS[k] || k)} cut ${Math.round(x.end - x.start)} s</a>`).join("") : ""}
+          ${c.status === "done" && !c.files_deleted ? `<a class="btn" href="${m}${esc(c.file)}?download=1">${ic("down")}Download</a>` : ""}
+          ${c.status === "done" && !c.files_deleted ? Object.entries(c.cuts || {}).map(([k, x]) => `<a class="btn sm" href="${m}${esc(x.file)}?download=1" title="A separate cut for ${esc(CUTS[k] || k)}">${ic("down")}${esc(CUTS[k] || k)} cut ${Math.round(x.end - x.start)} s</a>`).join("") : ""}
           <button class="btn" data-act="copy" data-j="${j.id}" data-c="${esc(c.id)}">${ic("copy")}Copy post text</button></div>
       </div></div>`;
   } else if (D.sig !== sig) $("#stage").innerHTML = stage;
@@ -2575,7 +2576,11 @@ document.addEventListener("click", async e => {
     }
     if (a === "copy") {
       const c = jobOf(d.j).clips.find(x => x.id === d.c);
-      await navigator.clipboard.writeText(`${c.title}\n\n${c.description}\n\n${(c.hashtags || []).map(h => "#" + h).join(" ")}`); return toast("Post text copied", "ok");
+      if (c.campaign && !campOf(c.campaign)) await loadCampaigns(true);
+      const k = campOf(c.campaign), req = k ? k.hashtags : [];     // as when posting: the campaign's tags, text and disclosure come last
+      const tags = (c.hashtags || []).filter(h => !req.some(x => x.toLowerCase() === h.toLowerCase())).slice(0, k ? 5 : undefined).concat(req);
+      await navigator.clipboard.writeText([c.title, c.description, tags.map(h => "#" + h).join(" "), ...(k ? [k.required_text, k.disclosure] : [])].filter(Boolean).join("\n\n"));
+      return toast("Post text copied", "ok");
     }
     if (a === "logout") { await api("/api/auth/logout", {method:"POST"}); location.href = "/"; return; }
     if (a === "pwsave") {

@@ -28,6 +28,7 @@ SETTING_DEFAULTS = {"discord_webhook": "", "telegram_token": "", "telegram_chat"
 
 YT_SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
 IG = "https://graph.instagram.com"
+FB = "https://graph.facebook.com/v21.0"      # for accounts added with a token from the "Facebook login" setup
 IG_UPLOAD = "https://rupload.facebook.com/ig-api-upload/v21.0"
 IG_SCOPES = "instagram_business_basic,instagram_business_content_publish"
 TT = "https://open.tiktokapis.com/v2"
@@ -393,12 +394,26 @@ def _instagram_save(token: str) -> dict:
     return acc
 
 
-def instagram_add(token: str) -> dict:
-    """An account added with a token pasted from the Meta app dashboard (older way; Connect is the normal one)."""
-    return _instagram_save(token.strip())
+def instagram_add(token: str, user_id: str = "") -> dict:
+    """An account added with a token pasted from the Meta app dashboard (older way; Connect is the normal one).
+    A token from the "Instagram API with Facebook login" setup starts with EAA, works through Facebook's API, and
+    needs the Instagram account's id (shown next to the account on that same dashboard page)."""
+    token = token.strip()
+    if not token.startswith("EAA"):
+        return _instagram_save(token)
+    if not user_id:
+        raise ValueError("A Facebook-login token needs the Instagram account's id from the Meta dashboard.")
+    me = _check(httpx.get(f"{FB}/{user_id}", params={"fields": "id,username"}, headers={"Authorization": f"Bearer {token}"},
+                          timeout=30), "Reading the Instagram account").json()
+    acc = {"id": f"ig_{me['id']}", "platform": "instagram", "name": "@" + me["username"], "added": time.time(),
+           "user_id": str(me["id"]), "token": token, "token_time": time.time(), "api": "facebook", "detail": ""}
+    _put(acc)
+    return acc
 
 
 def _ig_token(acc) -> str:
+    if acc.get("api") == "facebook":     # Instagram's own refresh does not take these; a new one is pasted when it ends
+        return acc["token"]
     if time.time() - acc.get("token_time", 0) > 7 * 86400:  # tokens last 60 days; refresh weekly
         try:
             r = _check(httpx.get(f"{IG}/refresh_access_token", params={"grant_type": "ig_refresh_token"},
@@ -416,12 +431,13 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
     token = _ig_token(acc)
     auth = {"Authorization": f"Bearer {token}"}
     uid = acc["user_id"]
+    api = FB if acc.get("api") == "facebook" else IG
     if config.PUBLIC_URL.startswith("https://") and job_id:
-        box = _check(httpx.post(f"{IG}/{uid}/media", data={"media_type": "REELS", "video_url": clip_link(job_id, path.name),
+        box = _check(httpx.post(f"{api}/{uid}/media", data={"media_type": "REELS", "video_url": clip_link(job_id, path.name),
                                                            "caption": caption[:2200], "share_to_feed": "true"},
                                 headers=auth, timeout=60), "Starting the Instagram post").json()
     else:
-        box = _check(httpx.post(f"{IG}/{uid}/media", data={"media_type": "REELS", "upload_type": "resumable",
+        box = _check(httpx.post(f"{api}/{uid}/media", data={"media_type": "REELS", "upload_type": "resumable",
                                                            "caption": caption[:2200], "share_to_feed": "true"},
                                 headers=auth, timeout=60), "Starting the Instagram upload").json()
         with path.open("rb") as f:
@@ -430,7 +446,7 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
                                        "file_size": str(path.stat().st_size)}, timeout=900),
                    "Uploading to Instagram (posting from a computer needs a public https address)")
     for _ in range(90):
-        st = _check(httpx.get(f"{IG}/{box['id']}", params={"fields": "status_code,status"}, headers=auth, timeout=30),
+        st = _check(httpx.get(f"{api}/{box['id']}", params={"fields": "status_code,status"}, headers=auth, timeout=30),
                     "Checking the Instagram upload").json()
         if st.get("status_code") in ("FINISHED", "PUBLISHED"):
             break
@@ -439,18 +455,18 @@ def instagram_upload(acc, path: Path, caption: str, job_id: str = ""):
         time.sleep(6)
     else:
         raise RuntimeError("Instagram took too long to process the video.")
-    pub = _check(httpx.post(f"{IG}/{uid}/media_publish", data={"creation_id": box["id"]}, headers=auth, timeout=60),
+    pub = _check(httpx.post(f"{api}/{uid}/media_publish", data={"creation_id": box["id"]}, headers=auth, timeout=60),
                  "Publishing on Instagram").json()
     link = ""
     try:
-        link = httpx.get(f"{IG}/{pub['id']}", params={"fields": "permalink"}, headers=auth, timeout=30).json().get("permalink", "")
+        link = httpx.get(f"{api}/{pub['id']}", params={"fields": "permalink"}, headers=auth, timeout=30).json().get("permalink", "")
     except Exception:  # noqa: BLE001
         pass
     return pub["id"], link
 
 
 def instagram_views(acc, media_id: str):
-    r = httpx.get(f"{IG}/{media_id}/insights", params={"metric": "views"},
+    r = httpx.get(f"{FB if acc.get('api') == 'facebook' else IG}/{media_id}/insights", params={"metric": "views"},
                   headers={"Authorization": f"Bearer {_ig_token(acc)}"}, timeout=30)
     if r.status_code != 200:
         return None

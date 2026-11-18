@@ -15,6 +15,7 @@ from . import alerts, auth, brain, bridge, campaigns, config, creators, ctx, job
 
 SESSIONS: dict = {}
 SEG_SEC = 6           # length of each buffer piece
+STALL_SEC = 30        # this much sound with no new video piece means the recording must reconnect
 PAD = 8               # seconds kept either side of a clip so it can be re-trimmed later
 CHECK_EVERY = 180     # look at the stream every 3 minutes...
 QUIET_MAX = 600       # ...but only ask the AI when something happened, or at most every 10 minutes when calm
@@ -189,7 +190,7 @@ class Session:
             with open(self.dir / "ffmpeg.log", "ab") as errlog:
                 self.proc = subprocess.Popen(cmd, cwd=self.buf, stdout=subprocess.PIPE, stderr=errlog,
                                              creationflags=media.NO_WINDOW)
-                got = 0
+                got, listed, got_at_piece = 0, -1, 0
                 while True:
                     data = self.proc.stdout.read(SR * 2)  # one second of 16-bit mono
                     if not data:
@@ -202,8 +203,17 @@ class Session:
                         self.pending += data
                         self.samples += len(data) // 2
                         self.db.append(level)
+                    f = self.buf / f"{p}.csv"
+                    size = f.stat().st_size if f.exists() else 0
+                    if size != listed:
+                        listed, got_at_piece = size, got
+                    elif got - got_at_piece > STALL_SEC * SR * 2:
+                        # Sound keeps coming but ffmpeg has stopped cutting video pieces: the stream's timestamps
+                        # jumped (Twitch does this around an ad break) and it never cuts again. Connect afresh.
+                        self.proc.terminate()
+                        break
                 self.proc.wait()
-            fails = 0 if got > SR * 2 * 20 else fails + 1
+            fails = 0 if got > SR * 2 * 20 and listed > 0 else fails + 1
             if fails >= 3:
                 break
             self.stop_flag.wait(3)
@@ -366,6 +376,8 @@ class Session:
         self.checks += 1
         self.tokens += tok
         keep = [c for c in cands if c["score"] >= (40 if must else st["min_score"])]
+        if must and not keep:     # a clip is due: on a game stream the words score low all along, so take the best one
+            keep = sorted(cands, key=lambda c: -c["score"])[:1]
         verdict["transcript"] = max((c["score"] for c in cands), default=0)
         if not keep:
             return self._verdict(verdict, "Words judge: nothing clip-worthy")
