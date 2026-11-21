@@ -3,24 +3,34 @@
 Where Clipping Studio stands today, and the steps to go from a creator's stream to a paid Content Rewards
 submission. For setup, see [README.md](README.md). For what to do when something breaks, see [RUNBOOK.md](RUNBOOK.md).
 
-## Status (2026-11-17)
+## Status (2026-11-22)
 
 | Part | State |
 |---|---|
-| Clips from a pasted video | Working. Tested end to end with a stand-in brain: a 5-minute stretch gave 3 finished clips in 75 s |
-| Live recording and clipping | Working. A pasted live link started recording in 20 s and made a clip |
-| Claude Code brain (MCP server) | Working in its self-test. **Not yet run on real work**: first real run still to do |
-| Campaigns, campaign check, tracker | Working in tests and the end-to-end run |
-| Reading Content Rewards campaign pages | Working on public pages |
-| Submitting to Content Rewards | **Built, not tested.** The submit form is only visible after logging in and joining a campaign |
+| Clips from a pasted video | Working: a TED talk and two hour-long CORE videos (16 clips, all passed their campaign check) |
+| Live recording and clipping | Working, at most **4 streams at once** on this laptop. 36 hours of GTA 6 streams in the first real run: 155 clips, 89 finished; nearly all failures came from recording 5–7 streams at once |
+| Claude Code brain (MCP server) | Working on real work: about 1,000 requests over the run, 60–110 an hour |
+| Campaigns, campaign check, tracker | Working. 9 joined campaigns imported, including pool campaigns; My campaigns reads the joined list |
+| Reading Content Rewards campaign pages | Working, logged in and out |
+| Submitting to Content Rewards | **Built, not tested.** Nothing was submitted in the first run |
 | Playbooks and rotation | Working: 9 playbooks, 4 layouts |
-| Edit effects | Working in test renders: cut pauses, punch-in zoom, freeze frame with slow-motion replay, streamer name tag. Set by the playbook, or by hand in the clip editor |
-| Separate cuts per platform | Working in tests: TikTok and Reels 15–35 s, Shorts 30–60 s by default. Each platform is posted its own version |
+| Edit effects | Working: cut pauses, punch-in zoom, freeze frame with slow-motion replay, streamer name tag |
+| Separate cuts per platform | Working: TikTok and Reels 15–35 s, Shorts 30–60 s by default |
 | Results page and weekly review | Built. Needs 10 or more posted clips with views before the review runs |
-| Posting to YouTube, Instagram, TikTok | From PeakCut, unchanged. Each account needs its one-time connection |
+| Posting to YouTube | Working: 10 Shorts posted, public. A new channel gets about **10 uploads a day** through the app |
+| Posting to Instagram | Working through a tunnel and a Meta token (see RUNBOOK, Instagram from this laptop): 31 Reels posted, then **the account was suspended** for posting too fast. Appeal pending |
+| Posting to TikTok | From PeakCut, not tried |
+| Coming back after a restart | `resume.cmd` (also from the Windows Startup folder) |
 | Waiting on outside things | TikTok view counts (needs TikTok to approve reading views for the app), the recipe importer (needs a sample recipe from your edit tool) |
 
-All 19 test groups pass (`python tests/run.py`), including the new ones for the edit effects and per-platform cuts.
+Limits and lessons from the first real run are in [RUNBOOK.md](RUNBOOK.md) under "Limits found on the first real run".
+
+**Secrets** (account tokens, the Google app's secret, the ngrok token and address, the brain's password, the link key)
+are listed in [secrets.example.json](secrets.example.json), with where each one goes. To back them up or move them to
+another computer, run `python scripts/collect-secrets.py`: it writes them all to `secrets/secrets.json`, which git
+ignores. Never commit or paste that file.
+18 of 19 test groups pass (`python tests/run.py`); the one that fails measures how fast the app notices the computer
+being free again, and cannot pass while the laptop is busy recording.
 
 ### First real runs with the Claude Code brain (2026-11-17)
 
